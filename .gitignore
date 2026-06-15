@@ -1,0 +1,14 @@
+node_modules
+.next
+out
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store
+npm-debug.log*
+
+# secrets / local data (never commit)
+.env
+.env.*
+*.db
+*.sqlite
+*.sqlite3

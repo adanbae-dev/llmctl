@@ -1,0 +1,125 @@
+@import "tailwindcss";
+
+html,
+body {
+  height: 100%;
+}
+body {
+  background: #0a0a0a;
+  color: #ededed;
+}
+
+/* Markdown rendering */
+.md {
+  font-size: 0.875rem;
+  line-height: 1.6;
+  word-break: break-word;
+}
+.md > :first-child {
+  margin-top: 0;
+}
+.md p {
+  margin: 0.4rem 0;
+}
+.md h1,
+.md h2,
+.md h3,
+.md h4 {
+  font-weight: 600;
+  margin: 0.8rem 0 0.4rem;
+}
+.md ul,
+.md ol {
+  margin: 0.4rem 0;
+  padding-left: 1.25rem;
+}
+.md ul {
+  list-style: disc;
+}
+.md ol {
+  list-style: decimal;
+}
+.md code {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+}
+.md pre {
+  background: #161616;
+  border: 1px solid #262626;
+  border-radius: 8px;
+  padding: 0.75rem;
+  overflow-x: auto;
+  margin: 0.5rem 0;
+}
+.md pre code {
+  background: transparent;
+  padding: 0;
+}
+.md a {
+  color: #60a5fa;
+  text-decoration: underline;
+}
+.md table {
+  border-collapse: collapse;
+  margin: 0.5rem 0;
+}
+.md th,
+.md td {
+  border: 1px solid #333;
+  padding: 0.25rem 0.5rem;
+}
+.md blockquote {
+  border-left: 3px solid #444;
+  padding-left: 0.75rem;
+  color: #aaa;
+  margin: 0.5rem 0;
+}
+
+
+/* react-day-picker (v9) dark theme — force all text visible on dark panel */
+.rdp-root {
+  --rdp-accent-color: #10b981;
+  --rdp-accent-background-color: rgba(16, 185, 129, 0.22);
+  --rdp-today-color: #fbbf24;
+  --rdp-background-color: #171717;
+  font-size: 0.8rem;
+  margin: 0;
+}
+/* rdp's default stylesheet colors text dark (for light bg); force light here */
+.rdp-root,
+.rdp-month_caption,
+.rdp-caption_label,
+.rdp-dropdown,
+.rdp-nav button,
+.rdp-day_button {
+  color: #ededed !important;
+}
+.rdp-weekday {
+  color: #737373 !important;
+}
+.rdp-chevron {
+  fill: #a3a3a3 !important;
+}
+.rdp-day_button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+/* selected / range endpoints — emerald fill, dark text, clearly visible */
+.rdp-selected .rdp-day_button,
+.rdp-range_start .rdp-day_button,
+.rdp-range_end .rdp-day_button {
+  background-color: #ffffff !important;
+  color: #000000 !important;
+  border-radius: 6px;
+}
+.rdp-range_middle .rdp-day_button {
+  background-color: rgba(255, 255, 255, 0.85) !important;
+  color: #000000 !important;
+}
+.rdp-today:not(.rdp-selected) .rdp-day_button {
+  color: #fbbf24 !important;
+}
+.rdp-disabled {
+  opacity: 0.35;
+}
