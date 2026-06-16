@@ -30,6 +30,20 @@ interface ToolRow {
   count: number
 }
 
+interface GroupRow {
+  key: string
+  input: number
+  output: number
+  cacheRead: number
+  cacheCreate: number
+  messages: number
+}
+
+interface CountRow {
+  key: string
+  count: number
+}
+
 type Provider = 'claude' | 'cursor' | 'codex'
 const PROVIDERS: { id: Provider; label: string }[] = [
   { id: 'claude', label: 'Claude' },
@@ -71,10 +85,58 @@ function Card({ label, value, accent }: { label: string; value: string; accent?:
   )
 }
 
+function shortPath(p: string): string {
+  const parts = p.split('/').filter(Boolean)
+  return parts.length <= 2 ? p : '…/' + parts.slice(-2).join('/')
+}
+
+function BarList({
+  title,
+  total,
+  items,
+  color = 'bg-sky-500',
+}: {
+  title: string
+  total?: number
+  items: { label: string; value: number; title?: string }[]
+  color?: string
+}) {
+  if (items.length === 0) return null
+  const max = items[0]?.value || 1
+  return (
+    <div>
+      <h3 className="mb-2 text-xs font-medium text-neutral-400">
+        {title}
+        {total != null && <span className="text-neutral-600"> · {total.toLocaleString()}</span>}
+      </h3>
+      <div className="space-y-1.5">
+        {items.map((t) => (
+          <div key={t.label} className="flex items-center gap-2 text-xs">
+            <span className="w-40 shrink-0 truncate font-mono text-neutral-300" title={t.title ?? t.label}>
+              {t.label}
+            </span>
+            <div className="relative h-4 flex-1 overflow-hidden rounded bg-neutral-800/40">
+              <div className={`h-full rounded ${color}`} style={{ width: `${Math.max((t.value / max) * 100, 2)}%` }} />
+            </div>
+            <span className="w-16 shrink-0 text-right tabular-nums text-neutral-400">{t.value.toLocaleString()}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function UsageDashboard() {
   const [provider, setProvider] = useState<Provider>('claude')
   const [rows, setRows] = useState<UsageRow[]>([])
   const [tools, setTools] = useState<ToolRow[]>([])
+  const [insights, setInsights] = useState<{
+    byProject: GroupRow[]
+    byBranch: GroupRow[]
+    stopReasons: CountRow[]
+    skills: CountRow[]
+    subagents: CountRow[]
+  }>({ byProject: [], byBranch: [], stopReasons: [], skills: [], subagents: [] })
   const [showAllTools, setShowAllTools] = useState(false)
   const [models, setModels] = useState<string[]>([])
   const [sel, setSel] = useState<Set<string>>(new Set())
@@ -113,6 +175,13 @@ export function UsageDashboard() {
         const ms: string[] = d.models ?? []
         setRows(rs)
         setTools(d.tools ?? [])
+        setInsights({
+          byProject: d.byProject ?? [],
+          byBranch: d.byBranch ?? [],
+          stopReasons: d.stopReasons ?? [],
+          skills: d.skills ?? [],
+          subagents: d.subagents ?? [],
+        })
         setModels(ms)
         setSel(new Set(ms))
         const dates = rs.map((r) => r.date).sort()
@@ -316,7 +385,7 @@ export function UsageDashboard() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
             <Card
               label="추정 비용 (USD)"
               value={`${hasApprox ? '≈ ' : ''}$${totalCost.toFixed(2)}`}
@@ -325,6 +394,11 @@ export function UsageDashboard() {
             <Card label="출력 토큰 (생성)" value={fmt(totals.output)} accent="text-emerald-300" />
             <Card label="입력 토큰" value={fmt(totals.input)} />
             <Card label="캐시 read 토큰" value={fmt(totals.cacheRead)} />
+            <Card
+              label="캐시 적중률"
+              value={`${((totals.cacheRead / Math.max(totals.input + totals.cacheRead + totals.cacheCreate, 1)) * 100).toFixed(0)}%`}
+              accent="text-violet-300"
+            />
             <Card label="메시지 수" value={fmt(totals.messages)} />
           </div>
 
@@ -482,6 +556,53 @@ export function UsageDashboard() {
               </div>
             )}
           </div>
+
+          {(insights.byBranch.length > 0 ||
+            insights.byProject.length > 0 ||
+            insights.stopReasons.length > 0 ||
+            insights.skills.length > 0 ||
+            insights.subagents.length > 0) && (
+            <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
+              <h2 className="mb-1 text-sm font-medium text-neutral-300">🧭 세션 인사이트</h2>
+              <p className="mb-3 text-[11px] text-neutral-600">전체 기간 기준 (위 기간 필터와 무관)</p>
+              <div className="grid gap-6 md:grid-cols-2">
+                <BarList
+                  title="브랜치별 토큰"
+                  items={insights.byBranch.map((g) => ({
+                    label: g.key,
+                    value: g.input + g.output + g.cacheRead + g.cacheCreate,
+                  }))}
+                  color="bg-emerald-500"
+                />
+                <BarList
+                  title="프로젝트별 토큰"
+                  items={insights.byProject.map((g) => ({
+                    label: shortPath(g.key),
+                    title: g.key,
+                    value: g.input + g.output + g.cacheRead + g.cacheCreate,
+                  }))}
+                  color="bg-sky-500"
+                />
+                <BarList
+                  title="스킬 · 슬래시 커맨드"
+                  total={insights.skills.reduce((s, x) => s + x.count, 0)}
+                  items={insights.skills.map((c) => ({ label: c.key, value: c.count }))}
+                  color="bg-amber-500"
+                />
+                <BarList
+                  title="서브에이전트"
+                  total={insights.subagents.reduce((s, x) => s + x.count, 0)}
+                  items={insights.subagents.map((c) => ({ label: c.key, value: c.count }))}
+                  color="bg-fuchsia-500"
+                />
+                <BarList
+                  title="종료 사유 (stop_reason)"
+                  items={insights.stopReasons.map((c) => ({ label: c.key, value: c.count }))}
+                  color="bg-neutral-500"
+                />
+              </div>
+            </div>
+          )}
 
           <p className="text-[11px] leading-relaxed text-neutral-600">
             ⚠️ 입력 토큰은 매 턴 컨텍스트가 재전송되어 합계가 부풀려질 수 있습니다. 실제 “생성량”은 출력 토큰을 참고하세요.

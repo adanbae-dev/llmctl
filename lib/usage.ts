@@ -26,9 +26,32 @@ export interface ToolRow {
   count: number
 }
 
+/** Token totals grouped by an arbitrary key (project path, git branch, …). */
+export interface GroupRow {
+  key: string
+  input: number
+  output: number
+  cacheRead: number
+  cacheCreate: number
+  messages: number
+}
+
+/** Simple key → occurrence count (stop reasons, skills, subagents, …). */
+export interface CountRow {
+  key: string
+  count: number
+}
+
 export interface ScanResult {
   rows: UsageRow[]
   tools: ToolRow[]
+  // Whole-dataset insights (not date-filtered). Present only where the
+  // provider's on-disk format carries the underlying field.
+  byProject?: GroupRow[]
+  byBranch?: GroupRow[]
+  stopReasons?: CountRow[]
+  skills?: CountRow[]
+  subagents?: CountRow[]
 }
 
 function safeParse(l: string): Record<string, unknown> | null {
@@ -75,10 +98,63 @@ function toolBucket(agg: Map<string, ToolRow>, date: string, tool: string): void
   else agg.set(key, { date, tool, count: 1 })
 }
 
-// ── Claude: assistant lines carry usage, model, timestamp, and tool_use blocks ──
+interface TokenDelta {
+  input: number
+  output: number
+  cacheRead: number
+  cacheCreate: number
+}
+
+function groupAdd(agg: Map<string, GroupRow>, key: string, d: TokenDelta): void {
+  let row = agg.get(key)
+  if (!row) {
+    row = { key, input: 0, output: 0, cacheRead: 0, cacheCreate: 0, messages: 0 }
+    agg.set(key, row)
+  }
+  row.input += d.input
+  row.output += d.output
+  row.cacheRead += d.cacheRead
+  row.cacheCreate += d.cacheCreate
+  row.messages += 1
+}
+
+function countInc(agg: Map<string, number>, key: string): void {
+  agg.set(key, (agg.get(key) ?? 0) + 1)
+}
+
+const groupTokens = (g: GroupRow) => g.input + g.output + g.cacheRead + g.cacheCreate
+
+function groupsOut(m: Map<string, GroupRow>): GroupRow[] {
+  return [...m.values()].sort((a, b) => groupTokens(b) - groupTokens(a)).slice(0, 30)
+}
+
+function countsOut(m: Map<string, number>): CountRow[] {
+  return [...m.entries()]
+    .map(([key, count]) => ({ key, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 30)
+}
+
+/** Pull `/skill` and slash-command names out of a raw Claude user line. */
+function extractSkills(line: string, skills: Map<string, number>): void {
+  const re = /<command-name>([^<]+)<\/command-name>/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(line)) !== null) {
+    const name = m[1].trim()
+    if (name) countInc(skills, name)
+  }
+}
+
+// ── Claude: assistant lines carry usage/model/timestamp/tool_use + cwd, gitBranch,
+// stop_reason, isSidechain; user lines may carry slash-command tags. ──
 async function scanClaude(): Promise<ScanResult> {
   const agg = new Map<string, UsageRow>()
   const tools = new Map<string, ToolRow>()
+  const projects = new Map<string, GroupRow>()
+  const branches = new Map<string, GroupRow>()
+  const stops = new Map<string, number>()
+  const skills = new Map<string, number>()
+  const subs = new Map<string, number>()
   let projectDirs: string[]
   try {
     projectDirs = await fs.readdir(CLAUDE_PROJECTS)
@@ -97,9 +173,13 @@ async function scanClaude(): Promise<ScanResult> {
       try {
         const buf = await fs.readFile(path.join(dir, f), 'utf8')
         for (const line of buf.split('\n')) {
-          if (!line.includes('"assistant"')) continue
+          const isAssistant = line.includes('"assistant"')
+          const hasCmd = line.includes('command-name')
+          if (!isAssistant && !hasCmd) continue
           const d = safeParse(line)
-          if (!d || d.type !== 'assistant') continue
+          if (!d) continue
+          if (hasCmd && d.type === 'user') extractSkills(line, skills)
+          if (d.type !== 'assistant') continue
           const m = d.message as Record<string, unknown> | undefined
           if (!m) continue
           const date = toLocalDate(d.timestamp)
@@ -116,12 +196,23 @@ async function scanClaude(): Promise<ScanResult> {
           // tokens
           const u = m.usage as Record<string, unknown> | undefined
           if (u) {
+            const delta: TokenDelta = {
+              input: Number(u.input_tokens) || 0,
+              output: Number(u.output_tokens) || 0,
+              cacheRead: Number(u.cache_read_input_tokens) || 0,
+              cacheCreate: Number(u.cache_creation_input_tokens) || 0,
+            }
             const row = bucket(agg, date, (m.model as string) || 'unknown')
-            row.input += Number(u.input_tokens) || 0
-            row.output += Number(u.output_tokens) || 0
-            row.cacheRead += Number(u.cache_read_input_tokens) || 0
-            row.cacheCreate += Number(u.cache_creation_input_tokens) || 0
+            row.input += delta.input
+            row.output += delta.output
+            row.cacheRead += delta.cacheRead
+            row.cacheCreate += delta.cacheCreate
             row.messages += 1
+            if (d.cwd) groupAdd(projects, String(d.cwd), delta)
+            if (d.gitBranch) groupAdd(branches, String(d.gitBranch), delta)
+            const sr = m.stop_reason
+            if (sr) countInc(stops, String(sr))
+            if (d.isSidechain === true) countInc(subs, d.agentName ? String(d.agentName) : '(subagent)')
           }
         }
       } catch {
@@ -129,7 +220,15 @@ async function scanClaude(): Promise<ScanResult> {
       }
     }
   }
-  return { rows: [...agg.values()], tools: [...tools.values()] }
+  return {
+    rows: [...agg.values()],
+    tools: [...tools.values()],
+    byProject: groupsOut(projects),
+    byBranch: groupsOut(branches),
+    stopReasons: countsOut(stops),
+    skills: countsOut(skills),
+    subagents: countsOut(subs),
+  }
 }
 
 // ── Cursor (IDE): bubbles carry tokenCount + createdAt; model from modelInfo,
@@ -179,7 +278,8 @@ async function scanCursor(): Promise<ScanResult> {
   return { rows: [...agg.values()], tools: [] }
 }
 
-// ── Codex: token_count events (usage) + response_item function_call (tools) ──
+// ── Codex: token_count events (usage) + response_item function_call (tools);
+// session_meta carries cwd + git for project/branch grouping. ──
 function extractCodexUsage(lines: string[]): { input: number; output: number; cacheRead: number } | null {
   let last: Record<string, unknown> | null = null
   for (const line of lines) {
@@ -197,6 +297,12 @@ function extractCodexUsage(lines: string[]): { input: number; output: number; ca
   const cacheRead = Number(last.cached_input_tokens ?? last.cache_read_input_tokens ?? 0)
   if (!input && !output) return null
   return { input, output, cacheRead }
+}
+
+function codexBranch(git: unknown): string {
+  if (!git || typeof git !== 'object') return ''
+  const g = git as Record<string, unknown>
+  return String(g.branch ?? g.branch_name ?? g.ref ?? '') || ''
 }
 
 function countCodexTools(lines: string[], date: string, tools: Map<string, ToolRow>): void {
@@ -228,12 +334,16 @@ async function walkCodex(dir: string, out: string[] = []): Promise<string[]> {
 async function scanCodex(): Promise<ScanResult> {
   const agg = new Map<string, UsageRow>()
   const tools = new Map<string, ToolRow>()
+  const projects = new Map<string, GroupRow>()
+  const branches = new Map<string, GroupRow>()
   const files = await walkCodex(CODEX_SESSIONS)
   for (const fp of files) {
     try {
       const head = await readHeadWindow(fp, 64 * 1024)
       let date: string | null = null
       let model = 'gpt (codex)'
+      let cwd = ''
+      let branch = ''
       for (const line of head) {
         const d = safeParse(line)
         if (!d) continue
@@ -241,10 +351,13 @@ async function scanCodex(): Promise<ScanResult> {
           const p = d.payload as Record<string, unknown>
           date = toLocalDate((p.timestamp as string) ?? d.timestamp)
           model = (p.model as string) || model
+          if (p.cwd) cwd = String(p.cwd)
+          if (!branch) branch = codexBranch(p.git)
         }
         if (d.type === 'turn_context') {
           const p = d.payload as Record<string, unknown> | undefined
           if (p?.model) model = String(p.model)
+          if (p?.cwd && !cwd) cwd = String(p.cwd)
         }
       }
       if (!date) continue
@@ -262,21 +375,29 @@ async function scanCodex(): Promise<ScanResult> {
       }
       const usage = extractCodexUsage(tailLines)
       if (usage) {
+        const delta: TokenDelta = { ...usage, cacheCreate: 0 }
         const row = bucket(agg, date, model)
         row.input += usage.input
         row.output += usage.output
         row.cacheRead += usage.cacheRead
         row.messages += 1
+        if (cwd) groupAdd(projects, cwd, delta)
+        if (branch) groupAdd(branches, branch, delta)
       }
       countCodexTools(allLines, date, tools)
     } catch {
       // skip
     }
   }
-  return { rows: [...agg.values()], tools: [...tools.values()] }
+  return {
+    rows: [...agg.values()],
+    tools: [...tools.values()],
+    byProject: groupsOut(projects),
+    byBranch: groupsOut(branches),
+  }
 }
 
-/** Aggregate token usage + tool usage by date for one provider. */
+/** Aggregate token usage + tool usage + insights by date for one provider. */
 export async function scanUsage(provider: string): Promise<ScanResult> {
   let res: ScanResult
   if (provider === 'cursor') res = await scanCursor()
