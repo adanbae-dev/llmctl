@@ -39,6 +39,18 @@ const PROVIDERS: { id: Provider; label: string }[] = [
 
 const fmt = (n: number) => n.toLocaleString()
 
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let v = n / 1024
+  let i = 0
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024
+    i++
+  }
+  return `${v.toFixed(1)} ${units[i]}`
+}
+
 // Category color for a tool name (built-in heuristics + MCP).
 function toolColor(tool: string): string {
   const t = tool.toLowerCase()
@@ -69,6 +81,26 @@ export function UsageDashboard() {
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
   const [loading, setLoading] = useState(true)
+  const [backupBusy, setBackupBusy] = useState(false)
+  const [backupMsg, setBackupMsg] = useState<string | null>(null)
+  const [backupErr, setBackupErr] = useState(false)
+
+  async function doBackup() {
+    setBackupBusy(true)
+    setBackupMsg(null)
+    setBackupErr(false)
+    try {
+      const r = await fetch('/api/backup', { method: 'POST' })
+      const d = await r.json()
+      if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`)
+      setBackupMsg(`백업 완료 · 새로 복사 ${fmt(d.filesCopied)}개 · 보관함 ${fmtBytes(d.archiveBytes)}`)
+    } catch (e) {
+      setBackupErr(true)
+      setBackupMsg(`백업 실패: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setBackupBusy(false)
+    }
+  }
 
   useEffect(() => {
     setLoading(true)
@@ -201,9 +233,27 @@ export function UsageDashboard() {
 
   return (
     <div className="space-y-5 p-6">
-      <div>
-        <h1 className="text-lg font-semibold">📊 토큰 사용량 · 비용</h1>
-        <p className="mt-0.5 text-xs text-neutral-500">제공자별 전 세션 합계 · 일자/모델 필터</p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="text-lg font-semibold">📊 토큰 사용량 · 비용</h1>
+          <p className="mt-0.5 text-xs text-neutral-500">제공자별 전 세션 합계 · 일자/모델 필터</p>
+        </div>
+        <div className="flex flex-col items-end gap-1">
+          <button
+            type="button"
+            onClick={doBackup}
+            disabled={backupBusy}
+            title="Claude·Codex·Gemini 세션을 ~/.llmctl/archive 로 증분 백업 (원본은 읽기 전용)"
+            className="shrink-0 rounded-md border border-neutral-700 px-3 py-1.5 text-xs font-medium text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
+          >
+            {backupBusy ? '백업 중…' : '💾 백업'}
+          </button>
+          {backupMsg && (
+            <span className={`text-[11px] ${backupErr ? 'text-red-400' : 'text-neutral-500'}`}>
+              {backupMsg}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* provider selector — always visible */}
