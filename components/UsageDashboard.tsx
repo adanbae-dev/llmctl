@@ -110,8 +110,8 @@ function BarList({
         {total != null && <span className="text-neutral-600"> · {total.toLocaleString()}</span>}
       </h3>
       <div className="space-y-1.5">
-        {items.map((t) => (
-          <div key={t.label} className="flex items-center gap-2 text-xs">
+        {items.map((t, i) => (
+          <div key={`${t.title ?? t.label}-${i}`} className="flex items-center gap-2 text-xs">
             <span className="w-40 shrink-0 truncate font-mono text-neutral-300" title={t.title ?? t.label}>
               {t.label}
             </span>
