@@ -80,6 +80,7 @@ export function UsageDashboard() {
   const [sel, setSel] = useState<Set<string>>(new Set())
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
+  const [series, setSeries] = useState({ output: true, input: true, cacheRead: false })
   const [loading, setLoading] = useState(true)
   const [backupBusy, setBackupBusy] = useState(false)
   const [backupMsg, setBackupMsg] = useState<string | null>(null)
@@ -329,6 +330,29 @@ export function UsageDashboard() {
 
           <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
             <h2 className="mb-3 text-sm font-medium text-neutral-300">일자별 토큰</h2>
+            <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
+              {(
+                [
+                  { key: 'output', label: '출력', on: 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300' },
+                  { key: 'input', label: '입력', on: 'border-blue-500/50 bg-blue-500/10 text-blue-300' },
+                  { key: 'cacheRead', label: '캐시read', on: 'border-violet-500/50 bg-violet-500/10 text-violet-300' },
+                ] as const
+              ).map((s) => (
+                <button
+                  key={s.key}
+                  type="button"
+                  onClick={() => setSeries((p) => ({ ...p, [s.key]: !p[s.key] }))}
+                  className={`rounded-full border px-2 py-0.5 ${
+                    series[s.key] ? s.on : 'border-neutral-700 text-neutral-500'
+                  }`}
+                >
+                  {s.label}
+                </button>
+              ))}
+              <span className="text-[11px] text-neutral-600">
+                캐시 read는 출력·입력보다 보통 10~100배 커서 기본 비표시
+              </span>
+            </div>
             <div className="h-72 w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={perDay} margin={{ top: 4, right: 8, left: 8, bottom: 4 }}>
@@ -343,9 +367,9 @@ export function UsageDashboard() {
                     formatter={(v) => fmt(Number(v) || 0)}
                   />
                   <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Bar dataKey="output" name="출력" stackId="a" fill="#34d399" />
-                  <Bar dataKey="input" name="입력" stackId="a" fill="#60a5fa" />
-                  <Bar dataKey="cacheRead" name="캐시read" stackId="a" fill="#a78bfa" />
+                  {series.output && <Bar dataKey="output" name="출력" stackId="a" fill="#34d399" />}
+                  {series.input && <Bar dataKey="input" name="입력" stackId="a" fill="#60a5fa" />}
+                  {series.cacheRead && <Bar dataKey="cacheRead" name="캐시read" stackId="a" fill="#a78bfa" />}
                 </BarChart>
               </ResponsiveContainer>
             </div>
