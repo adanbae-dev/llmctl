@@ -39,6 +39,17 @@ const PROVIDERS: { id: Provider; label: string }[] = [
 
 const fmt = (n: number) => n.toLocaleString()
 
+// Category color for a tool name (built-in heuristics + MCP).
+function toolColor(tool: string): string {
+  const t = tool.toLowerCase()
+  if (t.startsWith('mcp__')) return 'bg-fuchsia-500'
+  if (/(^|[_-])(bash|shell|exec|terminal)/.test(t)) return 'bg-red-500'
+  if (/(write|edit|apply_patch|create|notebookedit|multiedit)/.test(t)) return 'bg-amber-500'
+  if (/(read|grep|glob|search|webfetch|websearch|fetch|ls)/.test(t)) return 'bg-blue-500'
+  if (/(task|agent|worktree)/.test(t)) return 'bg-emerald-500'
+  return 'bg-neutral-500'
+}
+
 function Card({ label, value, accent }: { label: string; value: string; accent?: string }) {
   return (
     <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 px-4 py-3">
@@ -52,6 +63,7 @@ export function UsageDashboard() {
   const [provider, setProvider] = useState<Provider>('claude')
   const [rows, setRows] = useState<UsageRow[]>([])
   const [tools, setTools] = useState<ToolRow[]>([])
+  const [showAllTools, setShowAllTools] = useState(false)
   const [models, setModels] = useState<string[]>([])
   const [sel, setSel] = useState<Set<string>>(new Set())
   const [from, setFrom] = useState('')
@@ -60,6 +72,7 @@ export function UsageDashboard() {
 
   useEffect(() => {
     setLoading(true)
+    setShowAllTools(false)
     fetch(`/api/usage?provider=${provider}`)
       .then((r) => r.json())
       .then((d) => {
@@ -147,6 +160,35 @@ export function UsageDashboard() {
     }
     return [...m.entries()].map(([tool, count]) => ({ tool, count })).sort((a, b) => b.count - a.count)
   }, [tools, from, to])
+
+  // split tools into built-in vs MCP (mcp__<server>__<tool>), MCP grouped by server
+  const toolGroups = useMemo(() => {
+    const builtin = toolUsage.filter((t) => !t.tool.startsWith('mcp__'))
+    const mcp = toolUsage.filter((t) => t.tool.startsWith('mcp__'))
+    const servers = new Map<string, { name: string; count: number }[]>()
+    for (const t of mcp) {
+      const parts = t.tool.split('__')
+      const server = parts[1] || 'mcp'
+      const name = parts.slice(2).join('__') || t.tool
+      const arr = servers.get(server) ?? []
+      arr.push({ name, count: t.count })
+      servers.set(server, arr)
+    }
+    return {
+      builtin,
+      builtinTotal: builtin.reduce((s, t) => s + t.count, 0),
+      builtinMax: builtin[0]?.count || 1,
+      mcpTotal: mcp.reduce((s, t) => s + t.count, 0),
+      mcpMax: mcp[0]?.count || 1,
+      servers: [...servers.entries()]
+        .map(([server, tools]) => ({
+          server,
+          tools: tools.sort((a, b) => b.count - a.count),
+          total: tools.reduce((s, x) => s + x.count, 0),
+        }))
+        .sort((a, b) => b.total - a.total),
+    }
+  }, [toolUsage])
 
   function toggle(model: string) {
     setSel((prev) => {
@@ -292,22 +334,78 @@ export function UsageDashboard() {
             {toolUsage.length === 0 ? (
               <p className="text-xs text-neutral-600">이 제공자는 도구 호출 데이터가 없습니다.</p>
             ) : (
-              <table className="w-full text-left text-xs">
-                <thead className="text-neutral-500">
-                  <tr>
-                    <th className="py-1">도구</th>
-                    <th className="py-1 text-right">호출 수</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {toolUsage.map((t) => (
-                    <tr key={t.tool} className="border-t border-neutral-800/60">
-                      <td className="py-1 font-mono text-cyan-300">{t.tool}</td>
-                      <td className="py-1 text-right text-neutral-300">{fmt(t.count)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="grid gap-6 md:grid-cols-2">
+                {/* built-in tools */}
+                <div>
+                  <h3 className="mb-2 text-xs font-medium text-neutral-400">
+                    기본 도구 <span className="text-neutral-600">· {fmt(toolGroups.builtinTotal)}</span>
+                  </h3>
+                  {toolGroups.builtin.length === 0 ? (
+                    <p className="text-[11px] text-neutral-600">없음</p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {toolGroups.builtin.map((t) => (
+                        <div key={t.tool} className="flex items-center gap-2 text-xs">
+                          <span className="w-32 shrink-0 truncate font-mono text-neutral-300" title={t.tool}>
+                            {t.tool}
+                          </span>
+                          <div className="relative h-4 flex-1 overflow-hidden rounded bg-neutral-800/40">
+                            <div
+                              className={`h-full rounded ${toolColor(t.tool)}`}
+                              style={{ width: `${Math.max((t.count / toolGroups.builtinMax) * 100, 2)}%` }}
+                            />
+                          </div>
+                          <span className="w-12 shrink-0 text-right tabular-nums text-neutral-400">
+                            {fmt(t.count)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* MCP tools, grouped by server */}
+                <div>
+                  <h3 className="mb-2 text-xs font-medium text-neutral-400">
+                    MCP 도구 <span className="text-neutral-600">· {fmt(toolGroups.mcpTotal)}</span>
+                  </h3>
+                  {toolGroups.servers.length === 0 ? (
+                    <p className="text-[11px] text-neutral-600">MCP 도구 호출 없음</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {toolGroups.servers.map((s) => (
+                        <div key={s.server}>
+                          <div className="mb-1 flex items-center gap-1.5 text-[11px]">
+                            <span className="font-mono text-fuchsia-300">{s.server}</span>
+                            <span className="text-neutral-600">· {fmt(s.total)}</span>
+                          </div>
+                          <div className="space-y-1.5">
+                            {s.tools.map((x) => (
+                              <div key={x.name} className="flex items-center gap-2 text-xs">
+                                <span
+                                  className="w-32 shrink-0 truncate font-mono text-neutral-400"
+                                  title={x.name}
+                                >
+                                  {x.name}
+                                </span>
+                                <div className="relative h-4 flex-1 overflow-hidden rounded bg-neutral-800/40">
+                                  <div
+                                    className="h-full rounded bg-fuchsia-500"
+                                    style={{ width: `${Math.max((x.count / toolGroups.mcpMax) * 100, 2)}%` }}
+                                  />
+                                </div>
+                                <span className="w-12 shrink-0 text-right tabular-nums text-neutral-400">
+                                  {fmt(x.count)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
             )}
           </div>
 

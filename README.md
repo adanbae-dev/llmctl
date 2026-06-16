@@ -1,8 +1,40 @@
 # llmctl
 
+**English** | [한국어](README.ko.md)
+
 Local viewer for the session files written by local LLM CLIs and IDEs — **Claude Code,
 Codex (GPT), Gemini CLI, Cursor (IDE + CLI), and Antigravity CLI** — in one tabbed UI,
 plus a token-usage & cost dashboard. Runs entirely on your machine, **read-only** by default.
+
+## Security — safe to run, verify in 30 seconds
+
+llmctl reads your private LLM transcripts, so "is this safe?" is the right first question.
+Every guarantee below is checkable in your own clone — these aren't promises, they're greppable facts:
+
+- **No outbound network — ever.** Every request hits the app's own `/api/*`; there are no external
+  endpoints, telemetry, or analytics.
+  → `grep -rnE 'fetch\(|https?://|axios|WebSocket' app lib components` — only relative `/api/...`.
+- **Localhost-only.** `dev`/`start` bind to `127.0.0.1`, never `0.0.0.0`, so it's never on your LAN.
+  → `npm pkg get scripts.dev scripts.start`.
+- **Read-only of your sessions.** Adapters only ever read (`fs.readFile`, `sqlite3 -readonly … immutable=1`);
+  the app never writes to `~/.claude`, `~/.codex`, `~/.gemini`, or Cursor's databases.
+  → `grep -rn 'readFile|-readonly|immutable=1' lib`.
+- **Deletes are recoverable.** "Delete" moves a file to `~/.llmctl/trash/`; Cursor/Antigravity sessions
+  are merely hidden in `~/.llmctl/config.json`. Nothing is hard-deleted, and source DBs are never modified.
+  → `grep -n 'trashFile|rename' lib/store.ts`.
+- **Nothing secret in this repo.** Code only — it reads your home directory at runtime.
+  → `git grep -nE 'sk-|ghp_|AKIA'` returns nothing.
+- **Telemetry off.** The npm scripts set `NEXT_TELEMETRY_DISABLED=1`.
+
+It can still surface **secrets, tokens, and file contents** from your transcripts, so it stays guarded:
+
+- **Path-traversal guarded** — the single-session API only reads paths inside the requested provider's
+  own root (`isWithin`).
+- **SQL-injection guarded** — Cursor composer IDs are validated against a strict pattern before any
+  query; the usage queries contain no user input.
+- **CSRF guard** — state-changing `DELETE` requests reject browser cross-origin calls (same-origin only).
+- **No authentication** — anyone with access to the machine and the port can read transcripts. Don't run
+  it on a shared or exposed host.
 
 ## Features
 
@@ -12,8 +44,8 @@ plus a token-usage & cost dashboard. Runs entirely on your machine, **read-only*
   badges; a divider marking mid-session model changes.
 - **Dynamic detection**: providers are detected from on-disk data and installed binaries
   (with version) via `/api/providers`.
-- **Usage & cost dashboard** (Claude / Cursor / Codex): tokens by day and model, estimated USD
-  cost, a date-range calendar + model filters, and a Recharts bar chart.
+- **Usage & cost dashboard** (Claude / Cursor / Codex): tokens by day and model, **tool-call
+  counts**, estimated USD cost, a date-range calendar + model filters, and a Recharts bar chart.
 - **Session management**: delete file-based sessions to a recoverable trash; hide DB-backed
   (Cursor / Antigravity) sessions app-side without touching their databases.
 
@@ -55,24 +87,6 @@ Other scripts: `npm run build`, `npm run start`, `npm run lint`, `npm run typech
 > `dev` and `start` bind to **`127.0.0.1`** on purpose — the app can surface secrets from your
 > sessions, so it is not exposed on your LAN. To expose it intentionally, pass `-H 0.0.0.0` yourself.
 
-## Security
-
-This tool reads local LLM session files, which may contain **secrets, tokens, API keys, and file
-contents**. It is meant to run locally only:
-
-- **Bound to `127.0.0.1`** by default (not `0.0.0.0`). Makes **no outbound / telemetry** calls.
-- **Read-only** of provider session files — the app never writes to them.
-- **Path-traversal guarded** — the single-session API only reads paths inside the requested
-  provider's own root (`isWithin`).
-- **SQL-injection guarded** — Cursor composer IDs are validated against a strict pattern before
-  any query; the usage queries contain no user input.
-- **Delete is recoverable** — file-based sessions move to `~/.llmctl/trash/<provider>/` (not
-  hard-deleted); Cursor / Antigravity sessions are hidden via `~/.llmctl/config.json` (their
-  databases are never modified).
-- **CSRF guard** — state-changing `DELETE` requests reject browser cross-origin calls (same-origin only).
-- **No authentication** — anyone with access to the machine and the port can read transcripts.
-  Don't run it on a shared or exposed host.
-
 ## Cost estimates
 
 Costs are **estimates** (cache read ≈ 0.1× input, cache write ≈ 1.25×, 5-minute TTL assumption).
@@ -84,7 +98,7 @@ are **approximate** and marked with `≈`. Adjust any rate in `lib/pricing.ts`.
 - `lib/adapters/*` — one adapter per provider (`discover` / `parse` / `tail`), normalized into the
   shared model in `lib/adapters/types.ts`. Each adapter exposes a `tail()` seam + `appendable`
   flag so live-watch (v2) can be added without a rewrite.
-- `lib/usage.ts` — per-provider token aggregation by (date, model); `lib/pricing.ts` — cost.
+- `lib/usage.ts` — per-provider token & tool aggregation by (date, model); `lib/pricing.ts` — cost.
 - `lib/paths.ts` — env/OS-aware path resolution; `lib/store.ts` — trash + hide-list.
 - `app/api/*` — Node-runtime Route Handlers that read the filesystem / SQLite.
 - `components/*` — tabs, sidebar, conversation view, usage dashboard, date-range picker.

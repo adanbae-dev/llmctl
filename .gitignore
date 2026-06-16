@@ -12,3 +12,6 @@ npm-debug.log*
 *.db
 *.sqlite
 *.sqlite3
+
+# local Claude Code session artifacts
+.claude/
