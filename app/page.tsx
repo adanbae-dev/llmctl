@@ -31,12 +31,18 @@ export default function Home() {
       .catch(() => {})
   }, [])
 
-  useEffect(() => {
+  function loadSessions() {
+    setLoadingList(true)
     fetch('/api/sessions')
       .then((r) => r.json())
       .then((d) => setSessions(d.sessions ?? []))
       .catch(() => {})
       .finally(() => setLoadingList(false))
+  }
+
+  useEffect(() => {
+    loadSessions()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const counts = useMemo(() => {
@@ -120,6 +126,7 @@ export default function Home() {
               selectedId={selected?.id ?? null}
               onSelect={onSelect}
               onDelete={onDelete}
+              onRestored={loadSessions}
             />
             <div className="flex-1 overflow-hidden">
               <ConversationView session={session} loading={loadingSession} hasSelection={!!selected} />
