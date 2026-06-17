@@ -1,6 +1,7 @@
 import path from 'node:path'
 import { promises as fs } from 'node:fs'
-import { CLAUDE_PROJECTS, decodeClaudeDir, encodeId } from '../paths'
+import { decodeClaudeDir, encodeId } from '../paths'
+import { discoverWithArchive } from './archive'
 import { readLinesFromOffset, readHeadWindow } from './jsonl'
 import type {
   ProviderAdapter,
@@ -177,16 +178,16 @@ const parse: ProviderAdapter['parse'] = async (filePath) => {
   }
 }
 
-const discover: ProviderAdapter['discover'] = async () => {
+async function scanRoot(root: string): Promise<SessionSummary[]> {
   const out: SessionSummary[] = []
   let projectDirs: string[]
   try {
-    projectDirs = await fs.readdir(CLAUDE_PROJECTS)
+    projectDirs = await fs.readdir(root)
   } catch {
     return out
   }
   for (const proj of projectDirs) {
-    const dir = path.join(CLAUDE_PROJECTS, proj)
+    const dir = path.join(root, proj)
     let files: string[]
     try {
       files = (await fs.readdir(dir)).filter((f) => f.endsWith('.jsonl'))
@@ -203,6 +204,8 @@ const discover: ProviderAdapter['discover'] = async () => {
   }
   return out
 }
+
+const discover: ProviderAdapter['discover'] = () => discoverWithArchive('claude', scanRoot)
 
 export const claude: ProviderAdapter = {
   id: 'claude',

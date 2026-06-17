@@ -1,6 +1,7 @@
 import path from 'node:path'
 import { promises as fs } from 'node:fs'
-import { GEMINI_TMP, encodeId, resolveGeminiHash } from '../paths'
+import { encodeId, resolveGeminiHash } from '../paths'
+import { discoverWithArchive } from './archive'
 import type {
   ProviderAdapter,
   Session,
@@ -138,16 +139,16 @@ const parse: ProviderAdapter['parse'] = async (filePath) => {
   return { ...base, messages: s.messages }
 }
 
-const discover: ProviderAdapter['discover'] = async () => {
+async function scanRoot(root: string): Promise<SessionSummary[]> {
   const out: SessionSummary[] = []
   let hashes: string[]
   try {
-    hashes = await fs.readdir(GEMINI_TMP)
+    hashes = await fs.readdir(root)
   } catch {
     return out
   }
   for (const h of hashes) {
-    const chatsDir = path.join(GEMINI_TMP, h, 'chats')
+    const chatsDir = path.join(root, h, 'chats')
     let files: string[]
     try {
       files = (await fs.readdir(chatsDir)).filter(
@@ -166,6 +167,8 @@ const discover: ProviderAdapter['discover'] = async () => {
   }
   return out
 }
+
+const discover: ProviderAdapter['discover'] = () => discoverWithArchive('gemini', scanRoot)
 
 export const gemini: ProviderAdapter = {
   id: 'gemini',

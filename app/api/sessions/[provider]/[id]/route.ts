@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { promises as fs } from 'node:fs'
 import { getAdapter } from '@/lib/adapters'
-import { decodeId, isWithin, ROOTS } from '@/lib/paths'
+import { decodeId, isWithin, allowedRoots } from '@/lib/paths'
 import { trashFile, addIgnore } from '@/lib/store'
 import type { Provider, Session } from '@/lib/adapters/types'
 
@@ -73,8 +73,8 @@ export async function GET(
     }
   }
 
-  const root = ROOTS[provider as Provider]
-  if (!root || !isWithin(root, locator)) {
+  const roots = allowedRoots(provider as Provider)
+  if (!roots.some((r) => isWithin(r, locator))) {
     return NextResponse.json({ error: 'forbidden path' }, { status: 403 })
   }
   try {
@@ -112,8 +112,8 @@ export async function DELETE(
   }
 
   // File-based: move to ~/.llmctl/trash (recoverable), only inside the provider root.
-  const root = ROOTS[provider as Provider]
-  if (!root || !isWithin(root, locator)) {
+  const roots = allowedRoots(provider as Provider)
+  if (!roots.some((r) => isWithin(r, locator))) {
     return NextResponse.json({ error: 'forbidden path' }, { status: 403 })
   }
   try {

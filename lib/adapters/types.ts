@@ -36,6 +36,8 @@ export interface SessionSummary {
   model?: string
   sizeBytes?: number
   truncated?: boolean
+  /** Present only in the backup archive (deleted from the live root). */
+  archived?: boolean
 }
 
 export interface Session extends SessionSummary {

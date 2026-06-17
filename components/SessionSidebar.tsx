@@ -18,14 +18,18 @@ export function SessionSidebar({
   onDelete: (s: SessionSummary) => void
 }) {
   const [q, setQ] = useState('')
+  const [showArchived, setShowArchived] = useState(true)
+
+  const archivedCount = useMemo(() => sessions.filter((s) => s.archived).length, [sessions])
 
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase()
-    if (!s) return sessions
-    return sessions.filter(
-      (x) => x.title.toLowerCase().includes(s) || x.projectPath.toLowerCase().includes(s),
-    )
-  }, [sessions, q])
+    return sessions.filter((x) => {
+      if (!showArchived && x.archived) return false
+      if (!s) return true
+      return x.title.toLowerCase().includes(s) || x.projectPath.toLowerCase().includes(s)
+    })
+  }, [sessions, q, showArchived])
 
   return (
     <aside className="flex h-full w-80 shrink-0 flex-col border-r border-neutral-800 bg-neutral-950">
@@ -36,6 +40,17 @@ export function SessionSidebar({
           placeholder="검색 (제목 · 프로젝트)"
           className="w-full rounded-md border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-xs outline-none focus:border-neutral-600"
         />
+        {archivedCount > 0 && (
+          <label className="mt-2 flex items-center gap-1.5 text-[11px] text-neutral-500">
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={(e) => setShowArchived(e.target.checked)}
+              className="accent-amber-500"
+            />
+            보관본 포함 <span className="text-neutral-600">({archivedCount})</span>
+          </label>
+        )}
       </div>
       <div className="flex-1 overflow-y-auto">
         {loading && <p className="p-4 text-xs text-neutral-600">불러오는 중…</p>}
@@ -57,6 +72,9 @@ export function SessionSidebar({
                 </div>
                 <div className="mt-0.5 truncate text-[11px] text-neutral-500">{s.projectPath}</div>
                 <div className="mt-0.5 flex gap-2 text-[10px] text-neutral-600">
+                  {s.archived && (
+                    <span className="rounded bg-amber-500/15 px-1 font-medium text-amber-400">보관본</span>
+                  )}
                   <span>{relativeTime(s.updatedAt)}</span>
                   {s.sizeBytes != null && <span>{formatBytes(s.sizeBytes)}</span>}
                   {s.messageCount != null && <span>{s.messageCount} msgs</span>}

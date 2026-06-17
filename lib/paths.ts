@@ -40,6 +40,24 @@ export const ROOTS: Record<Provider, string> = {
   'antigravity-cli': ANTIGRAVITY_CLI_DIR,
 }
 
+/** Backup archive root (the mirror written by lib/backup.ts). */
+export const LLMCTL_ARCHIVE = path.join(HOME, '.llmctl', 'archive')
+
+/** Archive sub-roots per file-based provider, mirroring lib/backup.ts TARGETS. */
+export const ARCHIVE_ROOTS: Partial<Record<Provider, string>> = {
+  claude: path.join(LLMCTL_ARCHIVE, 'claude', 'projects'),
+  codex: path.join(LLMCTL_ARCHIVE, 'codex', 'sessions'),
+  gemini: path.join(LLMCTL_ARCHIVE, 'gemini', 'tmp'),
+}
+
+/** Roots a session locator may legitimately resolve under (live + archive). */
+export function allowedRoots(provider: Provider): string[] {
+  const roots = [ROOTS[provider]]
+  const archive = ARCHIVE_ROOTS[provider]
+  if (archive) roots.push(archive)
+  return roots
+}
+
 /** URL-safe session locator: the absolute file path (or composerId), base64url-encoded. */
 export function encodeId(filePath: string): string {
   return Buffer.from(filePath).toString('base64url')

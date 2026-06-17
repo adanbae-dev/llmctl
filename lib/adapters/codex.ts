@@ -1,6 +1,7 @@
 import path from 'node:path'
 import { promises as fs } from 'node:fs'
-import { CODEX_SESSIONS, encodeId } from '../paths'
+import { encodeId } from '../paths'
+import { discoverWithArchive } from './archive'
 import { readLinesFromOffset, readHeadWindow, readTailWindow } from './jsonl'
 import type {
   ProviderAdapter,
@@ -242,10 +243,9 @@ const parse: ProviderAdapter['parse'] = async (filePath) => {
   }
 }
 
-const discover: ProviderAdapter['discover'] = async () => {
+async function scanRoot(root: string): Promise<SessionSummary[]> {
   const out: SessionSummary[] = []
-  const files = await walk(CODEX_SESSIONS)
-  for (const fp of files) {
+  for (const fp of await walk(root)) {
     try {
       out.push(await summarize(fp))
     } catch {
@@ -254,6 +254,8 @@ const discover: ProviderAdapter['discover'] = async () => {
   }
   return out
 }
+
+const discover: ProviderAdapter['discover'] = () => discoverWithArchive('codex', scanRoot)
 
 export const codex: ProviderAdapter = {
   id: 'codex',

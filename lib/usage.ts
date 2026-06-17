@@ -2,7 +2,7 @@ import path from 'node:path'
 import { promises as fs } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { CLAUDE_PROJECTS, CURSOR_GLOBAL_DB, CODEX_SESSIONS } from './paths'
+import { CLAUDE_PROJECTS, CURSOR_GLOBAL_DB, CODEX_SESSIONS, ARCHIVE_ROOTS } from './paths'
 import { readHeadWindow, readTailWindow, readLinesFromOffset } from './adapters/jsonl'
 
 const execFileP = promisify(execFile)
@@ -145,6 +145,44 @@ function extractSkills(line: string, skills: Map<string, number>): void {
   }
 }
 
+/** Collect file paths under multiple roots, deduped by path relative to each
+ *  root so an archived copy of a live session isn't visited twice (live first). */
+async function dedupedFiles(
+  roots: string[],
+  list: (root: string) => Promise<string[]>,
+): Promise<string[]> {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const root of roots) {
+    for (const fp of await list(root)) {
+      const rel = path.relative(root, fp)
+      if (seen.has(rel)) continue
+      seen.add(rel)
+      out.push(fp)
+    }
+  }
+  return out
+}
+
+async function listClaudeFiles(root: string): Promise<string[]> {
+  const out: string[] = []
+  let projectDirs: string[]
+  try {
+    projectDirs = await fs.readdir(root)
+  } catch {
+    return out
+  }
+  for (const proj of projectDirs) {
+    const dir = path.join(root, proj)
+    try {
+      for (const f of await fs.readdir(dir)) if (f.endsWith('.jsonl')) out.push(path.join(dir, f))
+    } catch {
+      // skip
+    }
+  }
+  return out
+}
+
 // ── Claude: assistant lines carry usage/model/timestamp/tool_use + cwd, gitBranch,
 // stop_reason, isSidechain; user lines may carry slash-command tags. ──
 async function scanClaude(): Promise<ScanResult> {
@@ -155,71 +193,59 @@ async function scanClaude(): Promise<ScanResult> {
   const stops = new Map<string, number>()
   const skills = new Map<string, number>()
   const subs = new Map<string, number>()
-  let projectDirs: string[]
-  try {
-    projectDirs = await fs.readdir(CLAUDE_PROJECTS)
-  } catch {
-    return { rows: [], tools: [] }
-  }
-  for (const proj of projectDirs) {
-    const dir = path.join(CLAUDE_PROJECTS, proj)
-    let files: string[]
+
+  const roots = [CLAUDE_PROJECTS, ARCHIVE_ROOTS.claude].filter(Boolean) as string[]
+  const files = await dedupedFiles(roots, listClaudeFiles)
+
+  for (const fp of files) {
     try {
-      files = (await fs.readdir(dir)).filter((f) => f.endsWith('.jsonl'))
-    } catch {
-      continue
-    }
-    for (const f of files) {
-      try {
-        const buf = await fs.readFile(path.join(dir, f), 'utf8')
-        for (const line of buf.split('\n')) {
-          const isAssistant = line.includes('"assistant"')
-          const hasCmd = line.includes('command-name')
-          if (!isAssistant && !hasCmd) continue
-          const d = safeParse(line)
-          if (!d) continue
-          if (hasCmd && d.type === 'user') extractSkills(line, skills)
-          if (d.type !== 'assistant') continue
-          const m = d.message as Record<string, unknown> | undefined
-          if (!m) continue
-          const date = toLocalDate(d.timestamp)
-          if (!date) continue
-          // tool calls
-          const content = m.content
-          if (Array.isArray(content)) {
-            for (const b of content) {
-              if (b && typeof b === 'object' && (b as Record<string, unknown>).type === 'tool_use') {
-                toolBucket(tools, date, String((b as Record<string, unknown>).name || 'tool'))
-              }
+      const buf = await fs.readFile(fp, 'utf8')
+      for (const line of buf.split('\n')) {
+        const isAssistant = line.includes('"assistant"')
+        const hasCmd = line.includes('command-name')
+        if (!isAssistant && !hasCmd) continue
+        const d = safeParse(line)
+        if (!d) continue
+        if (hasCmd && d.type === 'user') extractSkills(line, skills)
+        if (d.type !== 'assistant') continue
+        const m = d.message as Record<string, unknown> | undefined
+        if (!m) continue
+        const date = toLocalDate(d.timestamp)
+        if (!date) continue
+        const content = m.content
+        if (Array.isArray(content)) {
+          for (const b of content) {
+            if (b && typeof b === 'object' && (b as Record<string, unknown>).type === 'tool_use') {
+              toolBucket(tools, date, String((b as Record<string, unknown>).name || 'tool'))
             }
-          }
-          // tokens
-          const u = m.usage as Record<string, unknown> | undefined
-          if (u) {
-            const delta: TokenDelta = {
-              input: Number(u.input_tokens) || 0,
-              output: Number(u.output_tokens) || 0,
-              cacheRead: Number(u.cache_read_input_tokens) || 0,
-              cacheCreate: Number(u.cache_creation_input_tokens) || 0,
-            }
-            const row = bucket(agg, date, (m.model as string) || 'unknown')
-            row.input += delta.input
-            row.output += delta.output
-            row.cacheRead += delta.cacheRead
-            row.cacheCreate += delta.cacheCreate
-            row.messages += 1
-            if (d.cwd) groupAdd(projects, String(d.cwd), delta)
-            if (d.gitBranch) groupAdd(branches, String(d.gitBranch), delta)
-            const sr = m.stop_reason
-            if (sr) countInc(stops, String(sr))
-            if (d.isSidechain === true) countInc(subs, d.agentName ? String(d.agentName) : '(subagent)')
           }
         }
-      } catch {
-        // skip
+        const u = m.usage as Record<string, unknown> | undefined
+        if (u) {
+          const delta: TokenDelta = {
+            input: Number(u.input_tokens) || 0,
+            output: Number(u.output_tokens) || 0,
+            cacheRead: Number(u.cache_read_input_tokens) || 0,
+            cacheCreate: Number(u.cache_creation_input_tokens) || 0,
+          }
+          const row = bucket(agg, date, (m.model as string) || 'unknown')
+          row.input += delta.input
+          row.output += delta.output
+          row.cacheRead += delta.cacheRead
+          row.cacheCreate += delta.cacheCreate
+          row.messages += 1
+          if (d.cwd) groupAdd(projects, String(d.cwd), delta)
+          if (d.gitBranch) groupAdd(branches, String(d.gitBranch), delta)
+          const sr = m.stop_reason
+          if (sr) countInc(stops, String(sr))
+          if (d.isSidechain === true) countInc(subs, d.agentName ? String(d.agentName) : '(subagent)')
+        }
       }
+    } catch {
+      // skip
     }
   }
+
   return {
     rows: [...agg.values()],
     tools: [...tools.values()],
@@ -336,7 +362,10 @@ async function scanCodex(): Promise<ScanResult> {
   const tools = new Map<string, ToolRow>()
   const projects = new Map<string, GroupRow>()
   const branches = new Map<string, GroupRow>()
-  const files = await walkCodex(CODEX_SESSIONS)
+
+  const roots = [CODEX_SESSIONS, ARCHIVE_ROOTS.codex].filter(Boolean) as string[]
+  const files = await dedupedFiles(roots, (root) => walkCodex(root))
+
   for (const fp of files) {
     try {
       const head = await readHeadWindow(fp, 64 * 1024)
