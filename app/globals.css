@@ -1,5 +1,60 @@
 @import "tailwindcss";
 
+/* ───────────────────────────────────────────────────────────────
+   Design tokens (Phase 1) — see .claude/plans/llmctl-design-direction.md
+   Principle: chrome (nav/tabs/borders) = monochrome; hue = data only.
+   Solid tokens map 1:1 to current neutral/hex values (no visual change).
+   --color-surface / --radius-section are the Phase 2 product targets used
+   by new components/ui/* primitives (not yet on screen in Phase 1).
+   ─────────────────────────────────────────────────────────────── */
+@theme {
+  /* Surfaces */
+  --color-bg: #0a0a0a;
+  --color-surface: #141414;
+  --color-surface-2: #1c1c1c;
+  --color-border: #262626;          /* = neutral-800 */
+  --color-border-strong: #404040;   /* = neutral-700 */
+
+  /* Foreground */
+  --color-fg-strong: #f5f5f5;       /* = neutral-100 */
+  --color-fg: #ededed;
+  --color-fg-muted: #a3a3a3;        /* = neutral-400 */
+  --color-fg-subtle: #737373;       /* = neutral-500 */
+  --color-fg-faint: #525252;        /* = neutral-600 */
+
+  /* Brand accent — chrome only (active tab, focus ring, primary action) */
+  --color-brand: #7c86ff;
+  --color-brand-fg: #ffffff;
+
+  /* Data semantics — color only inside data viz */
+  --color-data-cost: #fbbf24;       /* amber */
+  --color-data-output: #34d399;     /* emerald */
+  --color-data-input: #60a5fa;      /* blue */
+  --color-data-cache: #a78bfa;      /* violet */
+  --color-data-mcp: #e879f9;        /* fuchsia */
+  --color-danger: #f87171;          /* red */
+
+  /* Chart multi-series palette (matches current MODEL_COLORS) */
+  --color-series-1: #34d399;
+  --color-series-2: #60a5fa;
+  --color-series-3: #a78bfa;
+  --color-series-4: #fbbf24;
+  --color-series-5: #f472b6;
+  --color-series-6: #22d3ee;
+  --color-series-7: #fb923c;
+  --color-series-8: #a3e635;
+
+  /* Type scale additions (additive; Tailwind defaults untouched) */
+  --text-2xs: 0.6875rem;            /* 11px */
+  --text-2xs--line-height: 1rem;
+  --text-hero: 1.75rem;             /* 28px — overview hero KPI */
+  --text-hero--line-height: 2.25rem;
+
+  /* Radius */
+  --radius-card: 0.5rem;            /* = rounded-lg (current) */
+  --radius-section: 0.75rem;
+}
+
 html,
 body {
   height: 100%;
