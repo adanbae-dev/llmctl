@@ -39,7 +39,7 @@ export function SecuritySection({
       }
       description={`패턴 매칭 기반 추정 — 오탐 포함 가능 · ${secretSessions}개 세션에서 의심 패턴 발견. 실제 유출 여부는 해당 세션을 직접 확인하세요.`}
       actions={
-        <InfoDot label="세션 로그 텍스트에서 API 키·토큰·개인키·이메일 등 유출 의심 패턴을 정규식으로 탐지합니다. 예시·무해한 문자열도 매칭될 수 있습니다(오탐). Claude 세션만 대상." />
+        <InfoDot label="세션 로그 텍스트에서 API 키·토큰·개인키·JWT 등 고신호 크리덴셜을 정규식으로 탐지합니다. 예시·무해한 문자열도 매칭될 수 있습니다(오탐). Claude 세션만 대상." />
       }
     >
       <BarList

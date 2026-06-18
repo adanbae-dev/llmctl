@@ -135,20 +135,21 @@ function activityDateOut(m: Map<string, number>): { date: string; count: number 
 /** File-touching tools whose input.file_path feeds the "hot files" insight. */
 const FILE_TOOLS = new Set(['Read', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 
-// Pattern-based secret/PII detection over raw session text. Best-effort and
-// regex-only → may include false positives; surfaced as "추정" in the UI. Helps
-// users spot credentials accidentally left in their own local session logs.
-const SECRET_PATTERNS: { label: string; re: RegExp }[] = [
-  { label: 'AI API 키 (sk-…)', re: /sk-(?:ant-)?[A-Za-z0-9_-]{20,}/g },
-  { label: 'GitHub 토큰', re: /\b(?:ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}/g },
-  { label: 'AWS 액세스 키', re: /\bAKIA[0-9A-Z]{16}\b/g },
-  { label: 'Google API 키', re: /\bAIza[0-9A-Za-z_-]{35}\b/g },
-  { label: 'Slack 토큰', re: /\bxox[baprs]-[0-9A-Za-z-]{10,}/g },
-  { label: '개인키 블록', re: /-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----/g },
-  { label: 'JWT 토큰', re: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g },
-  { label: 'API키/시크릿 할당', re: /(?:api[_-]?key|secret|token|password|passwd)["']?\s*[:=]\s*["'][^"'\s]{12,}["']/gi },
-  { label: '이메일 (PII)', re: /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g },
-]
+// High-signal credential detection over raw session text — ONE combined pass
+// per file (perf: scanning each log 9× with a noisy email regex timed out
+// /api/usage). Email/PII and generic key=value patterns were dropped: too
+// noisy and too slow on large logs. Regex-only → still framed as "추정" in UI.
+const SECRET_RE =
+  /(?<ai>sk-(?:ant-)?[A-Za-z0-9_-]{20,})|(?<gh>(?:ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})|(?<aws>AKIA[0-9A-Z]{16})|(?<gcp>AIza[0-9A-Za-z_-]{35})|(?<slack>xox[baprs]-[0-9A-Za-z-]{10,})|(?<pk>-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----)|(?<jwt>eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})/g
+const SECRET_LABELS: Record<string, string> = {
+  ai: 'AI API 키 (sk-…)',
+  gh: 'GitHub 토큰',
+  aws: 'AWS 액세스 키',
+  gcp: 'Google API 키',
+  slack: 'Slack 토큰',
+  pk: '개인키 블록',
+  jwt: 'JWT 토큰',
+}
 
 function bucket(agg: Map<string, UsageRow>, date: string, model: string): UsageRow {
   const key = `${date}|${model}`
@@ -402,11 +403,16 @@ async function scanClaude(): Promise<ScanResult> {
         countInc(toolSeq, `${s1} → ${s2}`)
       }
       let fileHadSecret = false
-      for (const { label, re } of SECRET_PATTERNS) {
-        const m = buf.match(re)
-        if (m && m.length) {
-          secrets.set(label, (secrets.get(label) ?? 0) + m.length)
-          fileHadSecret = true
+      for (const m of buf.matchAll(SECRET_RE)) {
+        const g = m.groups
+        if (!g) continue
+        for (const key in g) {
+          if (g[key] !== undefined) {
+            const label = SECRET_LABELS[key]
+            secrets.set(label, (secrets.get(label) ?? 0) + 1)
+            fileHadSecret = true
+            break
+          }
         }
       }
       if (fileHadSecret) secretSessions += 1
