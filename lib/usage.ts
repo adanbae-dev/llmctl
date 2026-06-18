@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { CLAUDE_PROJECTS, CURSOR_GLOBAL_DB, CODEX_SESSIONS, ARCHIVE_ROOTS } from './paths'
 import { readHeadWindow, readTailWindow, readLinesFromOffset } from './adapters/jsonl'
+import { estimateCostUSD } from './pricing'
 
 const execFileP = promisify(execFile)
 const CODEX_SIZE_CAP = 50 * 1024 * 1024
@@ -26,7 +27,7 @@ export interface ToolRow {
   count: number
 }
 
-/** Token totals grouped by an arbitrary key (project path, git branch, …). */
+/** Token totals (+ estimated USD) grouped by an arbitrary key (project, branch). */
 export interface GroupRow {
   key: string
   input: number
@@ -34,12 +35,21 @@ export interface GroupRow {
   cacheRead: number
   cacheCreate: number
   messages: number
+  cost: number
 }
 
 /** Simple key → occurrence count (stop reasons, skills, subagents, …). */
 export interface CountRow {
   key: string
   count: number
+}
+
+/** Per-tool result tally for the error-rate insight (errors include
+ *  hook-blocked calls, which surface as tool_result.is_error). */
+export interface ToolErrorRow {
+  tool: string
+  total: number
+  errors: number
 }
 
 export interface ScanResult {
@@ -52,6 +62,9 @@ export interface ScanResult {
   stopReasons?: CountRow[]
   skills?: CountRow[]
   subagents?: CountRow[]
+  hotFiles?: CountRow[]
+  toolErrors?: ToolErrorRow[]
+  activity?: number[][] // 7 (Sun–Sat) × 24 (hour-of-day) message counts
 }
 
 function safeParse(l: string): Record<string, unknown> | null {
@@ -62,8 +75,8 @@ function safeParse(l: string): Record<string, unknown> | null {
   }
 }
 
-/** Accepts an ISO string or an epoch-ms number/string; returns local YYYY-MM-DD. */
-function toLocalDate(v: unknown): string | null {
+/** Accepts an ISO string or an epoch-ms number/string; returns a local Date. */
+function parseLocalDate(v: unknown): Date | null {
   if (v == null) return null
   let t: number
   if (typeof v === 'number') t = v
@@ -77,9 +90,28 @@ function toLocalDate(v: unknown): string | null {
     }
   }
   if (!t || Number.isNaN(t)) return null
-  const d = new Date(t)
+  return new Date(t)
+}
+
+/** Local YYYY-MM-DD for date bucketing. */
+function toLocalDate(v: unknown): string | null {
+  const d = parseLocalDate(v)
+  if (!d) return null
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
+
+/** Local weekday (0=Sun) and hour (0–23) for the activity heatmap. */
+function localHourDow(v: unknown): { hour: number; dow: number } | null {
+  const d = parseLocalDate(v)
+  return d ? { hour: d.getHours(), dow: d.getDay() } : null
+}
+
+function newActivity(): number[][] {
+  return Array.from({ length: 7 }, () => new Array<number>(24).fill(0))
+}
+
+/** File-touching tools whose input.file_path feeds the "hot files" insight. */
+const FILE_TOOLS = new Set(['Read', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 
 function bucket(agg: Map<string, UsageRow>, date: string, model: string): UsageRow {
   const key = `${date}|${model}`
@@ -105,10 +137,10 @@ interface TokenDelta {
   cacheCreate: number
 }
 
-function groupAdd(agg: Map<string, GroupRow>, key: string, d: TokenDelta): void {
+function groupAdd(agg: Map<string, GroupRow>, key: string, d: TokenDelta, cost: number): void {
   let row = agg.get(key)
   if (!row) {
-    row = { key, input: 0, output: 0, cacheRead: 0, cacheCreate: 0, messages: 0 }
+    row = { key, input: 0, output: 0, cacheRead: 0, cacheCreate: 0, messages: 0, cost: 0 }
     agg.set(key, row)
   }
   row.input += d.input
@@ -116,6 +148,7 @@ function groupAdd(agg: Map<string, GroupRow>, key: string, d: TokenDelta): void 
   row.cacheRead += d.cacheRead
   row.cacheCreate += d.cacheCreate
   row.messages += 1
+  row.cost += cost
 }
 
 function countInc(agg: Map<string, number>, key: string): void {
@@ -132,6 +165,14 @@ function countsOut(m: Map<string, number>): CountRow[] {
   return [...m.entries()]
     .map(([key, count]) => ({ key, count }))
     .sort((a, b) => b.count - a.count)
+    .slice(0, 30)
+}
+
+function toolErrorsOut(m: Map<string, { total: number; errors: number }>): ToolErrorRow[] {
+  return [...m.entries()]
+    .map(([tool, v]) => ({ tool, total: v.total, errors: v.errors }))
+    .filter((r) => r.total > 0)
+    .sort((a, b) => b.errors - a.errors || b.total - a.total)
     .slice(0, 30)
 }
 
@@ -193,30 +234,64 @@ async function scanClaude(): Promise<ScanResult> {
   const stops = new Map<string, number>()
   const skills = new Map<string, number>()
   const subs = new Map<string, number>()
+  const hotFiles = new Map<string, number>()
+  const toolErr = new Map<string, { total: number; errors: number }>()
+  const activity = newActivity()
 
   const roots = [CLAUDE_PROJECTS, ARCHIVE_ROOTS.claude].filter(Boolean) as string[]
   const files = await dedupedFiles(roots, listClaudeFiles)
 
   for (const fp of files) {
+    // tool_result lines carry only tool_use_id; map it back to the tool name
+    // emitted earlier in the same file (tool_use always precedes its result).
+    const idToName = new Map<string, string>()
     try {
       const buf = await fs.readFile(fp, 'utf8')
       for (const line of buf.split('\n')) {
         const isAssistant = line.includes('"assistant"')
         const hasCmd = line.includes('command-name')
-        if (!isAssistant && !hasCmd) continue
+        const hasToolResult = line.includes('tool_result')
+        if (!isAssistant && !hasCmd && !hasToolResult) continue
         const d = safeParse(line)
         if (!d) continue
         if (hasCmd && d.type === 'user') extractSkills(line, skills)
+        if (d.type === 'user') {
+          const um = d.message as Record<string, unknown> | undefined
+          const uc = um?.content
+          if (Array.isArray(uc)) {
+            for (const b of uc) {
+              if (b && typeof b === 'object' && (b as Record<string, unknown>).type === 'tool_result') {
+                const tr = b as Record<string, unknown>
+                const name = idToName.get(String(tr.tool_use_id ?? '')) || '(unknown)'
+                const te = toolErr.get(name) ?? { total: 0, errors: 0 }
+                te.total += 1
+                if (tr.is_error === true) te.errors += 1
+                toolErr.set(name, te)
+              }
+            }
+          }
+          continue
+        }
         if (d.type !== 'assistant') continue
         const m = d.message as Record<string, unknown> | undefined
         if (!m) continue
         const date = toLocalDate(d.timestamp)
         if (!date) continue
+        const hd = localHourDow(d.timestamp)
+        if (hd) activity[hd.dow][hd.hour] += 1
         const content = m.content
         if (Array.isArray(content)) {
           for (const b of content) {
             if (b && typeof b === 'object' && (b as Record<string, unknown>).type === 'tool_use') {
-              toolBucket(tools, date, String((b as Record<string, unknown>).name || 'tool'))
+              const tu = b as Record<string, unknown>
+              const name = String(tu.name || 'tool')
+              toolBucket(tools, date, name)
+              if (tu.id) idToName.set(String(tu.id), name)
+              if (FILE_TOOLS.has(name)) {
+                const inp = tu.input as Record<string, unknown> | undefined
+                const fpv = inp?.file_path
+                if (typeof fpv === 'string' && fpv) countInc(hotFiles, fpv)
+              }
             }
           }
         }
@@ -228,14 +303,16 @@ async function scanClaude(): Promise<ScanResult> {
             cacheRead: Number(u.cache_read_input_tokens) || 0,
             cacheCreate: Number(u.cache_creation_input_tokens) || 0,
           }
-          const row = bucket(agg, date, (m.model as string) || 'unknown')
+          const model = (m.model as string) || 'unknown'
+          const row = bucket(agg, date, model)
           row.input += delta.input
           row.output += delta.output
           row.cacheRead += delta.cacheRead
           row.cacheCreate += delta.cacheCreate
           row.messages += 1
-          if (d.cwd) groupAdd(projects, String(d.cwd), delta)
-          if (d.gitBranch) groupAdd(branches, String(d.gitBranch), delta)
+          const cost = estimateCostUSD(model, delta)
+          if (d.cwd) groupAdd(projects, String(d.cwd), delta, cost)
+          if (d.gitBranch) groupAdd(branches, String(d.gitBranch), delta, cost)
           const sr = m.stop_reason
           if (sr) countInc(stops, String(sr))
           if (d.isSidechain === true) countInc(subs, d.agentName ? String(d.agentName) : '(subagent)')
@@ -254,6 +331,9 @@ async function scanClaude(): Promise<ScanResult> {
     stopReasons: countsOut(stops),
     skills: countsOut(skills),
     subagents: countsOut(subs),
+    hotFiles: countsOut(hotFiles),
+    toolErrors: toolErrorsOut(toolErr),
+    activity,
   }
 }
 
@@ -291,9 +371,12 @@ async function scanCursor(): Promise<ScanResult> {
   )
 
   const agg = new Map<string, UsageRow>()
+  const activity = newActivity()
   for (const r of rows) {
     const date = toLocalDate(r.ts)
     if (!date) continue
+    const hd = localHourDow(r.ts)
+    if (hd) activity[hd.dow][hd.hour] += 1
     const cid = String(r.k).split(':')[1]
     const model = (r.model ? String(r.model) : '') || composerModel.get(cid) || 'cursor'
     const row = bucket(agg, date, model)
@@ -301,7 +384,7 @@ async function scanCursor(): Promise<ScanResult> {
     row.output += Number(r.outp) || 0
     row.messages += 1
   }
-  return { rows: [...agg.values()], tools: [] }
+  return { rows: [...agg.values()], tools: [], activity }
 }
 
 // ── Codex: token_count events (usage) + response_item function_call (tools);
@@ -362,6 +445,7 @@ async function scanCodex(): Promise<ScanResult> {
   const tools = new Map<string, ToolRow>()
   const projects = new Map<string, GroupRow>()
   const branches = new Map<string, GroupRow>()
+  const activity = newActivity()
 
   const roots = [CODEX_SESSIONS, ARCHIVE_ROOTS.codex].filter(Boolean) as string[]
   const files = await dedupedFiles(roots, (root) => walkCodex(root))
@@ -370,6 +454,7 @@ async function scanCodex(): Promise<ScanResult> {
     try {
       const head = await readHeadWindow(fp, 64 * 1024)
       let date: string | null = null
+      let tsRaw: unknown = null
       let model = 'gpt (codex)'
       let cwd = ''
       let branch = ''
@@ -378,7 +463,8 @@ async function scanCodex(): Promise<ScanResult> {
         if (!d) continue
         if (d.type === 'session_meta' && d.payload) {
           const p = d.payload as Record<string, unknown>
-          date = toLocalDate((p.timestamp as string) ?? d.timestamp)
+          tsRaw = (p.timestamp as string) ?? d.timestamp
+          date = toLocalDate(tsRaw)
           model = (p.model as string) || model
           if (p.cwd) cwd = String(p.cwd)
           if (!branch) branch = codexBranch(p.git)
@@ -390,6 +476,8 @@ async function scanCodex(): Promise<ScanResult> {
         }
       }
       if (!date) continue
+      const hd = localHourDow(tsRaw)
+      if (hd) activity[hd.dow][hd.hour] += 1
       const stat = await fs.stat(fp)
       let allLines: string[]
       let tailLines: string[]
@@ -410,8 +498,9 @@ async function scanCodex(): Promise<ScanResult> {
         row.output += usage.output
         row.cacheRead += usage.cacheRead
         row.messages += 1
-        if (cwd) groupAdd(projects, cwd, delta)
-        if (branch) groupAdd(branches, branch, delta)
+        const cost = estimateCostUSD(model, delta)
+        if (cwd) groupAdd(projects, cwd, delta, cost)
+        if (branch) groupAdd(branches, branch, delta, cost)
       }
       countCodexTools(allLines, date, tools)
     } catch {
@@ -423,6 +512,7 @@ async function scanCodex(): Promise<ScanResult> {
     tools: [...tools.values()],
     byProject: groupsOut(projects),
     byBranch: groupsOut(branches),
+    activity,
   }
 }
 

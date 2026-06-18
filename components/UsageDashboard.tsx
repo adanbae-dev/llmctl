@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   BarChart,
   Bar,
+  ComposedChart,
+  Line,
   XAxis,
   YAxis,
   Tooltip,
@@ -37,11 +39,18 @@ interface GroupRow {
   cacheRead: number
   cacheCreate: number
   messages: number
+  cost: number
 }
 
 interface CountRow {
   key: string
   count: number
+}
+
+interface ToolErrorRow {
+  tool: string
+  total: number
+  errors: number
 }
 
 type Provider = 'claude' | 'cursor' | 'codex'
@@ -52,6 +61,8 @@ const PROVIDERS: { id: Provider; label: string }[] = [
 ]
 
 const fmt = (n: number) => n.toLocaleString()
+const usd = (n: number) => `$${n.toFixed(2)}`
+const DOW = ['일', '월', '화', '수', '목', '금', '토']
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`
@@ -95,14 +106,17 @@ function BarList({
   total,
   items,
   color = 'bg-sky-500',
+  fmtValue,
 }: {
   title: string
   total?: number
   items: { label: string; value: number; title?: string }[]
   color?: string
+  fmtValue?: (n: number) => string
 }) {
   if (items.length === 0) return null
   const max = items[0]?.value || 1
+  const f = fmtValue ?? ((n: number) => n.toLocaleString())
   return (
     <div>
       <h3 className="mb-2 text-xs font-medium text-neutral-400">
@@ -118,7 +132,43 @@ function BarList({
             <div className="relative h-4 flex-1 overflow-hidden rounded bg-neutral-800/40">
               <div className={`h-full rounded ${color}`} style={{ width: `${Math.max((t.value / max) * 100, 2)}%` }} />
             </div>
-            <span className="w-16 shrink-0 text-right tabular-nums text-neutral-400">{t.value.toLocaleString()}</span>
+            <span className="w-20 shrink-0 text-right tabular-nums text-neutral-400">{f(t.value)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/** Activity heatmap: 7 weekdays × 24 hours, intensity scaled to the busiest cell. */
+function ActivityHeatmap({ data }: { data: number[][] }) {
+  if (!data || data.length === 0) return null
+  const max = Math.max(1, ...data.flat())
+  return (
+    <div className="overflow-x-auto">
+      <div className="inline-block">
+        <div className="flex">
+          <div className="w-7 shrink-0" />
+          {Array.from({ length: 24 }).map((_, h) => (
+            <div key={h} className="w-[14px] shrink-0 text-center text-[8px] text-neutral-600">
+              {h % 6 === 0 ? h : ''}
+            </div>
+          ))}
+        </div>
+        {data.map((row, dow) => (
+          <div key={dow} className="flex items-center">
+            <div className="w-7 shrink-0 text-[10px] text-neutral-500">{DOW[dow]}</div>
+            {row.map((c, h) => (
+              <div
+                key={h}
+                className="m-[1px] h-[12px] w-[12px] shrink-0 rounded-sm"
+                title={`${DOW[dow]}요일 ${h}시 · ${c.toLocaleString()}`}
+                style={{
+                  backgroundColor:
+                    c === 0 ? 'rgba(255,255,255,0.04)' : `rgba(52,211,153,${0.15 + 0.85 * (c / max)})`,
+                }}
+              />
+            ))}
           </div>
         ))}
       </div>
@@ -136,7 +186,20 @@ export function UsageDashboard() {
     stopReasons: CountRow[]
     skills: CountRow[]
     subagents: CountRow[]
-  }>({ byProject: [], byBranch: [], stopReasons: [], skills: [], subagents: [] })
+    hotFiles: CountRow[]
+    toolErrors: ToolErrorRow[]
+    activity: number[][]
+  }>({
+    byProject: [],
+    byBranch: [],
+    stopReasons: [],
+    skills: [],
+    subagents: [],
+    hotFiles: [],
+    toolErrors: [],
+    activity: [],
+  })
+  const [insightMetric, setInsightMetric] = useState<'tokens' | 'cost'>('tokens')
   const [showAllTools, setShowAllTools] = useState(false)
   const [models, setModels] = useState<string[]>([])
   const [sel, setSel] = useState<Set<string>>(new Set())
@@ -181,6 +244,9 @@ export function UsageDashboard() {
           stopReasons: d.stopReasons ?? [],
           skills: d.skills ?? [],
           subagents: d.subagents ?? [],
+          hotFiles: d.hotFiles ?? [],
+          toolErrors: d.toolErrors ?? [],
+          activity: d.activity ?? [],
         })
         setModels(ms)
         setSel(new Set(ms))
@@ -234,6 +300,36 @@ export function UsageDashboard() {
     }
     return [...m.values()].sort((a, b) => a.date.localeCompare(b.date))
   }, [filtered])
+
+  // Daily estimated cost + running total + 7-day moving average (respects filters).
+  const costTrend = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const r of filtered) m.set(r.date, (m.get(r.date) ?? 0) + estimateCostUSD(r.model, r))
+    const days = [...m.entries()]
+      .map(([date, cost]) => ({ date, cost }))
+      .sort((a, b) => a.date.localeCompare(b.date))
+    let cum = 0
+    return days.map((d, i) => {
+      cum += d.cost
+      const win = days.slice(Math.max(0, i - 6), i + 1)
+      const avg7 = win.reduce((s, x) => s + x.cost, 0) / win.length
+      return { date: d.date, cost: d.cost, cumulative: cum, avg7 }
+    })
+  }, [filtered])
+
+  const hasActivity = useMemo(
+    () => insights.activity.some((row) => row.some((c) => c > 0)),
+    [insights.activity],
+  )
+
+  // byProject / byBranch bars, switched between token total and estimated $.
+  const groupItems = (gs: GroupRow[], label: (g: GroupRow) => { label: string; title?: string }) =>
+    gs
+      .map((g) => ({
+        ...label(g),
+        value: insightMetric === 'cost' ? g.cost ?? 0 : g.input + g.output + g.cacheRead + g.cacheCreate,
+      }))
+      .sort((a, b) => b.value - a.value)
 
   const perModel = useMemo(() => {
     const m = new Map<
@@ -449,6 +545,42 @@ export function UsageDashboard() {
             </div>
           </div>
 
+          {costTrend.length > 1 && (
+            <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
+              <h2 className="mb-1 text-sm font-medium text-neutral-300">💲 비용 추이 (추정)</h2>
+              <p className="mb-3 text-[11px] text-neutral-600">
+                일일 비용 · 7일 이동평균(좌축) · 누적(우축) — 위 기간·모델 필터 반영
+              </p>
+              <div className="h-72 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={costTrend} margin={{ top: 4, right: 8, left: 8, bottom: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#262626" />
+                    <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#888' }} />
+                    <YAxis
+                      yAxisId="left"
+                      tick={{ fontSize: 11, fill: '#888' }}
+                      tickFormatter={(v: number) => `$${v < 10 ? v.toFixed(1) : Math.round(v)}`}
+                    />
+                    <YAxis
+                      yAxisId="right"
+                      orientation="right"
+                      tick={{ fontSize: 11, fill: '#888' }}
+                      tickFormatter={(v: number) => `$${Math.round(v)}`}
+                    />
+                    <Tooltip
+                      contentStyle={{ background: '#171717', border: '1px solid #333', borderRadius: 8, fontSize: 12 }}
+                      formatter={(v) => usd(Number(v) || 0)}
+                    />
+                    <Legend wrapperStyle={{ fontSize: 12 }} />
+                    <Bar yAxisId="left" dataKey="cost" name="일일 비용" fill="#fbbf24" />
+                    <Line yAxisId="left" dataKey="avg7" name="7일 평균" stroke="#34d399" strokeWidth={2} dot={false} />
+                    <Line yAxisId="right" dataKey="cumulative" name="누적" stroke="#a78bfa" strokeWidth={2} dot={false} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+
           <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
             <h2 className="mb-3 text-sm font-medium text-neutral-300">모델별</h2>
             <table className="w-full text-left text-xs">
@@ -482,6 +614,7 @@ export function UsageDashboard() {
             {toolUsage.length === 0 ? (
               <p className="text-xs text-neutral-600">이 제공자는 도구 호출 데이터가 없습니다.</p>
             ) : (
+              <>
               <div className="grid gap-6 md:grid-cols-2">
                 {/* built-in tools */}
                 <div>
@@ -554,34 +687,94 @@ export function UsageDashboard() {
                   )}
                 </div>
               </div>
+              {insights.toolErrors.some((t) => t.errors > 0) && (
+                <div className="mt-5 border-t border-neutral-800 pt-4">
+                  <h3 className="mb-2 text-xs font-medium text-neutral-400">
+                    ⚠️ 도구 오류율 <span className="text-neutral-600">· 차단·실패 결과 / 전체 결과 (차단된 hook 호출 포함)</span>
+                  </h3>
+                  <div className="grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
+                    {insights.toolErrors
+                      .filter((t) => t.errors > 0)
+                      .slice(0, 12)
+                      .map((t) => {
+                        const rate = t.total ? (t.errors / t.total) * 100 : 0
+                        return (
+                          <div key={t.tool} className="flex items-center gap-2 text-xs">
+                            <span className="w-32 shrink-0 truncate font-mono text-neutral-300" title={t.tool}>
+                              {t.tool}
+                            </span>
+                            <div className="relative h-4 flex-1 overflow-hidden rounded bg-neutral-800/40">
+                              <div
+                                className="h-full rounded bg-red-500/70"
+                                style={{ width: `${Math.max(rate, 2)}%` }}
+                              />
+                            </div>
+                            <span className="w-20 shrink-0 text-right tabular-nums text-neutral-400">
+                              {fmt(t.errors)}/{fmt(t.total)} ({rate.toFixed(0)}%)
+                            </span>
+                          </div>
+                        )
+                      })}
+                  </div>
+                </div>
+              )}
+              </>
             )}
           </div>
+
+          {hasActivity && (
+            <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
+              <h2 className="mb-1 text-sm font-medium text-neutral-300">🕒 활동 히트맵 (요일 × 시간)</h2>
+              <p className="mb-3 text-[11px] text-neutral-600">
+                {provider === 'claude' ? '응답 메시지 기준' : provider === 'codex' ? '세션 시작 기준' : '메시지 기준'} · 로컬
+                시간 · 전체 기간
+              </p>
+              <ActivityHeatmap data={insights.activity} />
+            </div>
+          )}
 
           {(insights.byBranch.length > 0 ||
             insights.byProject.length > 0 ||
             insights.stopReasons.length > 0 ||
             insights.skills.length > 0 ||
+            insights.hotFiles.length > 0 ||
             insights.subagents.length > 0) && (
             <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
-              <h2 className="mb-1 text-sm font-medium text-neutral-300">🧭 세션 인사이트</h2>
-              <p className="mb-3 text-[11px] text-neutral-600">전체 기간 기준 (위 기간 필터와 무관)</p>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h2 className="text-sm font-medium text-neutral-300">🧭 세션 인사이트</h2>
+                  <p className="text-[11px] text-neutral-600">전체 기간 기준 (위 기간 필터와 무관)</p>
+                </div>
+                <div className="flex items-center gap-1 text-[11px]">
+                  <span className="text-neutral-600">프로젝트·브랜치:</span>
+                  {(['tokens', 'cost'] as const).map((mt) => (
+                    <button
+                      key={mt}
+                      type="button"
+                      onClick={() => setInsightMetric(mt)}
+                      className={`rounded-full border px-2 py-0.5 ${
+                        insightMetric === mt
+                          ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
+                          : 'border-neutral-700 text-neutral-500'
+                      }`}
+                    >
+                      {mt === 'tokens' ? '토큰' : '비용'}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="grid gap-6 md:grid-cols-2">
                 <BarList
-                  title="브랜치별 토큰"
-                  items={insights.byBranch.map((g) => ({
-                    label: g.key,
-                    value: g.input + g.output + g.cacheRead + g.cacheCreate,
-                  }))}
+                  title={insightMetric === 'cost' ? '브랜치별 비용 (추정 USD)' : '브랜치별 토큰'}
+                  items={groupItems(insights.byBranch, (g) => ({ label: g.key }))}
                   color="bg-emerald-500"
+                  fmtValue={insightMetric === 'cost' ? usd : undefined}
                 />
                 <BarList
-                  title="프로젝트별 토큰"
-                  items={insights.byProject.map((g) => ({
-                    label: shortPath(g.key),
-                    title: g.key,
-                    value: g.input + g.output + g.cacheRead + g.cacheCreate,
-                  }))}
+                  title={insightMetric === 'cost' ? '프로젝트별 비용 (추정 USD)' : '프로젝트별 토큰'}
+                  items={groupItems(insights.byProject, (g) => ({ label: shortPath(g.key), title: g.key }))}
                   color="bg-sky-500"
+                  fmtValue={insightMetric === 'cost' ? usd : undefined}
                 />
                 <BarList
                   title="스킬 · 슬래시 커맨드"
@@ -599,6 +792,16 @@ export function UsageDashboard() {
                   title="종료 사유 (stop_reason)"
                   items={insights.stopReasons.map((c) => ({ label: c.key, value: c.count }))}
                   color="bg-neutral-500"
+                />
+                <BarList
+                  title="자주 연 파일 (Read·Edit·Write)"
+                  total={insights.hotFiles.reduce((s, x) => s + x.count, 0)}
+                  items={insights.hotFiles.map((c) => ({
+                    label: shortPath(c.key),
+                    title: c.key,
+                    value: c.count,
+                  }))}
+                  color="bg-blue-500"
                 />
               </div>
             </div>
