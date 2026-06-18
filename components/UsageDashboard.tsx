@@ -14,7 +14,7 @@ import {
   CartesianGrid,
 } from 'recharts'
 import { DateRangePicker } from './DateRangePicker'
-import { estimateCostUSD, isApprox } from '@/lib/pricing'
+import { estimateCostUSD, isApprox, ratesFor } from '@/lib/pricing'
 
 interface UsageRow {
   date: string
@@ -53,6 +53,14 @@ interface ToolErrorRow {
   errors: number
 }
 
+interface SessionStat {
+  id: string
+  project: string
+  date: string
+  cost: number
+  sizeBytes: number
+}
+
 type Provider = 'claude' | 'cursor' | 'codex'
 const PROVIDERS: { id: Provider; label: string }[] = [
   { id: 'claude', label: 'Claude' },
@@ -63,6 +71,7 @@ const PROVIDERS: { id: Provider; label: string }[] = [
 const fmt = (n: number) => n.toLocaleString()
 const usd = (n: number) => `$${n.toFixed(2)}`
 const DOW = ['일', '월', '화', '수', '목', '금', '토']
+const MODEL_COLORS = ['#34d399', '#60a5fa', '#a78bfa', '#fbbf24', '#f472b6', '#22d3ee', '#fb923c', '#a3e635']
 
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`
@@ -263,6 +272,7 @@ export function UsageDashboard() {
     toolErrors: ToolErrorRow[]
     activity: number[][]
     activityByDate: { date: string; count: number }[]
+    sessions: SessionStat[]
   }>({
     byProject: [],
     byBranch: [],
@@ -273,6 +283,7 @@ export function UsageDashboard() {
     toolErrors: [],
     activity: [],
     activityByDate: [],
+    sessions: [],
   })
   const [insightMetric, setInsightMetric] = useState<'tokens' | 'cost'>('tokens')
   const [heatmapView, setHeatmapView] = useState<'dow' | 'date'>('dow')
@@ -324,6 +335,7 @@ export function UsageDashboard() {
           toolErrors: d.toolErrors ?? [],
           activity: d.activity ?? [],
           activityByDate: d.activityByDate ?? [],
+          sessions: d.sessions ?? [],
         })
         setModels(ms)
         setSel(new Set(ms))
@@ -401,6 +413,54 @@ export function UsageDashboard() {
   const activityRange = insights.activityByDate.length
     ? `${insights.activityByDate[0].date} ~ ${insights.activityByDate[insights.activityByDate.length - 1].date}`
     : '전체 기간'
+
+  // Daily output tokens pivoted by model — stacked share-over-time (respects filters).
+  const modelTrend = useMemo(() => {
+    const m = new Map<string, Record<string, number | string>>()
+    for (const r of filtered) {
+      const e = m.get(r.date) ?? { date: r.date }
+      e[r.model] = (Number(e[r.model]) || 0) + r.output
+      m.set(r.date, e)
+    }
+    return [...m.values()].sort((a, b) => String(a.date).localeCompare(String(b.date)))
+  }, [filtered])
+
+  const efficiency = useMemo(() => {
+    let saved = 0
+    for (const r of filtered) saved += (r.cacheRead * ratesFor(r.model).input * 0.9) / 1_000_000
+    return { saved, outIn: totals.input ? totals.output / totals.input : 0 }
+  }, [filtered, totals])
+
+  const truncation = useMemo(() => {
+    const total = insights.stopReasons.reduce((s, x) => s + x.count, 0)
+    const trunc = insights.stopReasons
+      .filter((s) => /max_tokens|max_output|length/i.test(s.key))
+      .reduce((s, x) => s + x.count, 0)
+    return { total, rate: total ? (trunc / total) * 100 : 0 }
+  }, [insights.stopReasons])
+
+  const activityStats = useMemo(() => {
+    const days = insights.activityByDate
+    if (!days.length) return null
+    const toMs = (s: string) => {
+      const [y, mo, d] = s.split('-').map(Number)
+      return new Date(y, mo - 1, d).getTime()
+    }
+    let longest = 1
+    let cur = 1
+    for (let i = 1; i < days.length; i++) {
+      const gap = Math.round((toMs(days[i].date) - toMs(days[i - 1].date)) / 86_400_000)
+      if (gap === 1) {
+        cur += 1
+        longest = Math.max(longest, cur)
+      } else {
+        cur = 1
+      }
+    }
+    const total = days.reduce((s, x) => s + x.count, 0)
+    const busiest = days.reduce((a, b) => (b.count > a.count ? b : a))
+    return { activeDays: days.length, longest, busiest, avg: total / days.length }
+  }, [insights.activityByDate])
 
   // byProject / byBranch bars, switched between token total and estimated $.
   const groupItems = (gs: GroupRow[], label: (g: GroupRow) => { label: string; title?: string }) =>
@@ -578,6 +638,26 @@ export function UsageDashboard() {
             <Card label="메시지 수" value={fmt(totals.messages)} />
           </div>
 
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+            <Card label="캐시 절약 (추정)" value={`≈ $${efficiency.saved.toFixed(2)}`} accent="text-emerald-300" />
+            <Card label="출력/입력 비율" value={efficiency.outIn.toFixed(3)} />
+            {truncation.total > 0 && (
+              <Card
+                label="잘림율 (max_tokens·전체)"
+                value={`${truncation.rate.toFixed(1)}%`}
+                accent={truncation.rate > 5 ? 'text-red-300' : undefined}
+              />
+            )}
+            {activityStats && (
+              <Card
+                label="최장 연속·활동일"
+                value={`${activityStats.longest}·${activityStats.activeDays}일`}
+                accent="text-violet-300"
+              />
+            )}
+            {activityStats && <Card label="가장 바쁜 날" value={activityStats.busiest.date} />}
+          </div>
+
           <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
             <h2 className="mb-3 text-sm font-medium text-neutral-300">일자별 토큰</h2>
             <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
@@ -656,6 +736,41 @@ export function UsageDashboard() {
                     <Line yAxisId="left" dataKey="avg7" name="7일 평균" stroke="#34d399" strokeWidth={2} dot={false} />
                     <Line yAxisId="right" dataKey="cumulative" name="누적" stroke="#a78bfa" strokeWidth={2} dot={false} />
                   </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+
+          {models.length > 1 && modelTrend.length > 0 && (
+            <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
+              <h2 className="mb-1 text-sm font-medium text-neutral-300">📈 모델 점유율 추이</h2>
+              <p className="mb-3 text-[11px] text-neutral-600">일자별 출력(생성) 토큰을 모델별로 누적 · 기간·모델 필터 반영</p>
+              <div className="h-72 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={modelTrend} margin={{ top: 4, right: 8, left: 8, bottom: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#262626" />
+                    <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#888' }} />
+                    <YAxis
+                      tick={{ fontSize: 11, fill: '#888' }}
+                      tickFormatter={(v: number) => (v >= 1000 ? `${Math.round(v / 1000)}k` : String(v))}
+                    />
+                    <Tooltip
+                      contentStyle={{ background: '#171717', border: '1px solid #333', borderRadius: 8, fontSize: 12 }}
+                      formatter={(v) => fmt(Number(v) || 0)}
+                    />
+                    <Legend wrapperStyle={{ fontSize: 12 }} />
+                    {models
+                      .filter((mm) => sel.has(mm))
+                      .map((mm) => (
+                        <Bar
+                          key={mm}
+                          dataKey={(row) => Number(row[mm]) || 0}
+                          name={mm}
+                          stackId="m"
+                          fill={MODEL_COLORS[models.indexOf(mm) % MODEL_COLORS.length]}
+                        />
+                      ))}
+                  </BarChart>
                 </ResponsiveContainer>
               </div>
             </div>
@@ -839,6 +954,33 @@ export function UsageDashboard() {
               ) : (
                 <CalendarHeatmap data={insights.activityByDate} />
               )}
+            </div>
+          )}
+
+          {insights.sessions.length > 0 && (
+            <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
+              <h2 className="mb-1 text-sm font-medium text-neutral-300">🗂 세션 Top-N (정리 후보)</h2>
+              <p className="mb-3 text-[11px] text-neutral-600">전체 기간 · 세션 = 파일 1개 · 삭제는 💬 세션 탭에서</p>
+              <div className="grid gap-6 md:grid-cols-2">
+                <BarList
+                  title="가장 비싼 세션 (추정 USD)"
+                  items={[...insights.sessions]
+                    .sort((a, b) => b.cost - a.cost)
+                    .slice(0, 15)
+                    .map((s) => ({ label: `${shortPath(s.project)} · ${s.date}`, title: s.project, value: s.cost }))}
+                  color="bg-amber-500"
+                  fmtValue={usd}
+                />
+                <BarList
+                  title="가장 큰 세션 (용량)"
+                  items={[...insights.sessions]
+                    .sort((a, b) => b.sizeBytes - a.sizeBytes)
+                    .slice(0, 15)
+                    .map((s) => ({ label: `${shortPath(s.project)} · ${s.date}`, title: s.project, value: s.sizeBytes }))}
+                  color="bg-rose-500"
+                  fmtValue={fmtBytes}
+                />
+              </div>
             </div>
           )}
 

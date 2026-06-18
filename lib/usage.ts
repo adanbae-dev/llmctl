@@ -2,7 +2,7 @@ import path from 'node:path'
 import { promises as fs } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { CLAUDE_PROJECTS, CURSOR_GLOBAL_DB, CODEX_SESSIONS, ARCHIVE_ROOTS } from './paths'
+import { CLAUDE_PROJECTS, CURSOR_GLOBAL_DB, CODEX_SESSIONS, ARCHIVE_ROOTS, encodeId } from './paths'
 import { readHeadWindow, readTailWindow, readLinesFromOffset } from './adapters/jsonl'
 import { estimateCostUSD } from './pricing'
 
@@ -52,6 +52,15 @@ export interface ToolErrorRow {
   errors: number
 }
 
+/** Per-session totals for the "largest / costliest sessions" insight. */
+export interface SessionStat {
+  id: string // base64url file locator (matches the session viewer's id)
+  project: string
+  date: string
+  cost: number
+  sizeBytes: number
+}
+
 export interface ScanResult {
   rows: UsageRow[]
   tools: ToolRow[]
@@ -66,6 +75,7 @@ export interface ScanResult {
   toolErrors?: ToolErrorRow[]
   activity?: number[][] // 7 (Sun–Sat) × 24 (hour-of-day) message counts
   activityByDate?: { date: string; count: number }[] // per calendar day, chronological
+  sessions?: SessionStat[] // union of top-N by cost and top-N by size
 }
 
 function safeParse(l: string): Record<string, unknown> | null {
@@ -184,6 +194,21 @@ function toolErrorsOut(m: Map<string, { total: number; errors: number }>): ToolE
     .slice(0, 30)
 }
 
+/** Union of the 30 costliest and 30 largest sessions (deduped by id). */
+function topSessions(all: SessionStat[]): SessionStat[] {
+  const byCost = [...all].sort((a, b) => b.cost - a.cost).slice(0, 30)
+  const bySize = [...all].sort((a, b) => b.sizeBytes - a.sizeBytes).slice(0, 30)
+  const seen = new Set<string>()
+  const out: SessionStat[] = []
+  for (const s of [...byCost, ...bySize]) {
+    if (!seen.has(s.id)) {
+      seen.add(s.id)
+      out.push(s)
+    }
+  }
+  return out
+}
+
 /** Pull `/skill` and slash-command names out of a raw Claude user line. */
 function extractSkills(line: string, skills: Map<string, number>): void {
   const re = /<command-name>([^<]+)<\/command-name>/g
@@ -246,6 +271,7 @@ async function scanClaude(): Promise<ScanResult> {
   const toolErr = new Map<string, { total: number; errors: number }>()
   const activity = newActivity()
   const activityDate = new Map<string, number>()
+  const sessionStats: SessionStat[] = []
 
   const roots = [CLAUDE_PROJECTS, ARCHIVE_ROOTS.claude].filter(Boolean) as string[]
   const files = await dedupedFiles(roots, listClaudeFiles)
@@ -254,6 +280,9 @@ async function scanClaude(): Promise<ScanResult> {
     // tool_result lines carry only tool_use_id; map it back to the tool name
     // emitted earlier in the same file (tool_use always precedes its result).
     const idToName = new Map<string, string>()
+    let fileCost = 0
+    let fileCwd = ''
+    let fileDate = ''
     try {
       const buf = await fs.readFile(fp, 'utf8')
       for (const line of buf.split('\n')) {
@@ -323,12 +352,24 @@ async function scanClaude(): Promise<ScanResult> {
           row.cacheCreate += delta.cacheCreate
           row.messages += 1
           const cost = estimateCostUSD(model, delta)
+          fileCost += cost
+          if (!fileCwd && d.cwd) fileCwd = String(d.cwd)
+          if (!fileDate) fileDate = date
           if (d.cwd) groupAdd(projects, String(d.cwd), delta, cost)
           if (d.gitBranch) groupAdd(branches, String(d.gitBranch), delta, cost)
           const sr = m.stop_reason
           if (sr) countInc(stops, String(sr))
           if (d.isSidechain === true) countInc(subs, d.agentName ? String(d.agentName) : '(subagent)')
         }
+      }
+      if (fileDate) {
+        sessionStats.push({
+          id: encodeId(fp),
+          project: fileCwd,
+          date: fileDate,
+          cost: fileCost,
+          sizeBytes: Buffer.byteLength(buf, 'utf8'),
+        })
       }
     } catch {
       // skip
@@ -347,6 +388,7 @@ async function scanClaude(): Promise<ScanResult> {
     toolErrors: toolErrorsOut(toolErr),
     activity,
     activityByDate: activityDateOut(activityDate),
+    sessions: topSessions(sessionStats),
   }
 }
 
@@ -464,6 +506,7 @@ async function scanCodex(): Promise<ScanResult> {
   const branches = new Map<string, GroupRow>()
   const activity = newActivity()
   const activityDate = new Map<string, number>()
+  const sessionStats: SessionStat[] = []
 
   const roots = [CODEX_SESSIONS, ARCHIVE_ROOTS.codex].filter(Boolean) as string[]
   const files = await dedupedFiles(roots, (root) => walkCodex(root))
@@ -522,6 +565,7 @@ async function scanCodex(): Promise<ScanResult> {
         const cost = estimateCostUSD(model, delta)
         if (cwd) groupAdd(projects, cwd, delta, cost)
         if (branch) groupAdd(branches, branch, delta, cost)
+        sessionStats.push({ id: encodeId(fp), project: cwd, date, cost, sizeBytes: stat.size })
       }
       countCodexTools(allLines, date, tools)
     } catch {
@@ -535,6 +579,7 @@ async function scanCodex(): Promise<ScanResult> {
     byBranch: groupsOut(branches),
     activity,
     activityByDate: activityDateOut(activityDate),
+    sessions: topSessions(sessionStats),
   }
 }
 
