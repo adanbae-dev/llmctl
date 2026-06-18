@@ -77,6 +77,7 @@ export interface ScanResult {
   activity?: number[][] // 7 (Sun–Sat) × 24 (hour-of-day) message counts
   activityByDate?: { date: string; count: number }[] // per calendar day, chronological
   sessions?: SessionStat[] // union of top-N by cost and top-N by size
+  cacheTtl?: { ttl5m: number; ttl1h: number } // cache-creation tokens by TTL (Claude), whole-dataset
 }
 
 function safeParse(l: string): Record<string, unknown> | null {
@@ -271,6 +272,8 @@ async function scanClaude(): Promise<ScanResult> {
   const hotFiles = new Map<string, number>()
   const toolSeq = new Map<string, number>()
   const toolErr = new Map<string, { total: number; errors: number }>()
+  let ttl5m = 0
+  let ttl1h = 0
   const activity = newActivity()
   const activityDate = new Map<string, number>()
   const sessionStats: SessionStat[] = []
@@ -348,6 +351,11 @@ async function scanClaude(): Promise<ScanResult> {
             cacheRead: Number(u.cache_read_input_tokens) || 0,
             cacheCreate: Number(u.cache_creation_input_tokens) || 0,
           }
+          const cc = u.cache_creation as Record<string, unknown> | undefined
+          if (cc) {
+            ttl5m += Number(cc.ephemeral_5m_input_tokens) || 0
+            ttl1h += Number(cc.ephemeral_1h_input_tokens) || 0
+          }
           const model = (m.model as string) || 'unknown'
           const row = bucket(agg, date, model)
           row.input += delta.input
@@ -399,6 +407,7 @@ async function scanClaude(): Promise<ScanResult> {
     hotFiles: countsOut(hotFiles),
     toolSeq: countsOut(toolSeq),
     toolErrors: toolErrorsOut(toolErr),
+    cacheTtl: { ttl5m, ttl1h },
     activity,
     activityByDate: activityDateOut(activityDate),
     sessions: topSessions(sessionStats),

@@ -55,6 +55,7 @@ export interface Insights {
   hotFiles: CountRow[]
   toolSeq: CountRow[]
   toolErrors: ToolErrorRow[]
+  cacheTtl: { ttl5m: number; ttl1h: number }
   activity: number[][]
   activityByDate: { date: string; count: number }[]
   sessions: SessionStat[]

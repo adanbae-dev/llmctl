@@ -39,6 +39,7 @@ const EMPTY_INSIGHTS: Insights = {
   activity: [],
   activityByDate: [],
   sessions: [],
+  cacheTtl: { ttl5m: 0, ttl1h: 0 },
 }
 
 export function UsageDashboard() {
@@ -97,6 +98,7 @@ export function UsageDashboard() {
           activity: d.activity ?? [],
           activityByDate: d.activityByDate ?? [],
           sessions: d.sessions ?? [],
+          cacheTtl: d.cacheTtl ?? { ttl5m: 0, ttl1h: 0 },
         })
         setModels(ms)
         setSel(new Set(ms))
@@ -416,6 +418,7 @@ export function UsageDashboard() {
               perModel={perModel}
               byBranch={insights.byBranch}
               byProject={insights.byProject}
+              cacheTtl={insights.cacheTtl}
               insightMetric={insightMetric}
               setInsightMetric={setInsightMetric}
             />

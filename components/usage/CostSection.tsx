@@ -23,6 +23,7 @@ export function CostSection({
   perModel,
   byBranch,
   byProject,
+  cacheTtl,
   insightMetric,
   setInsightMetric,
 }: {
@@ -33,6 +34,7 @@ export function CostSection({
   perModel: PerModel[]
   byBranch: GroupRow[]
   byProject: GroupRow[]
+  cacheTtl: { ttl5m: number; ttl1h: number }
   insightMetric: 'tokens' | 'cost'
   setInsightMetric: Dispatch<SetStateAction<'tokens' | 'cost'>>
 }) {
@@ -44,6 +46,8 @@ export function CostSection({
       }))
       .sort((a, b) => b.value - a.value)
   const hasCostGroups = byBranch.length > 0 || byProject.length > 0
+  const ttlTotal = cacheTtl.ttl5m + cacheTtl.ttl1h
+  const ttlMax = Math.max(cacheTtl.ttl5m, cacheTtl.ttl1h, 1)
   return (
     <div className="space-y-6">
       {costTrend.length > 1 && (
@@ -145,6 +149,33 @@ export function CostSection({
           </tbody>
         </table>
       </Section>
+
+      {ttlTotal > 0 && (
+        <Section
+          title="🧊 캐시 생성 TTL"
+          description={`${GLOSSARY.wholeRange} · 1시간 캐시는 write 단가가 높지만 더 오래 유지됩니다`}
+        >
+          <div className="space-y-1.5">
+            {[
+              { label: '5분 TTL', value: cacheTtl.ttl5m },
+              { label: '1시간 TTL', value: cacheTtl.ttl1h },
+            ].map((r) => (
+              <div key={r.label} className="flex items-center gap-2 text-xs">
+                <span className="w-20 shrink-0 text-fg-muted">{r.label}</span>
+                <div className="relative h-4 flex-1 overflow-hidden rounded bg-neutral-800/40">
+                  <div
+                    className="h-full rounded bg-data-cache"
+                    style={{ width: `${Math.max((r.value / ttlMax) * 100, 2)}%` }}
+                  />
+                </div>
+                <span className="w-28 shrink-0 text-right tabular-nums text-fg-muted">
+                  {fmt(r.value)} ({ttlTotal ? ((r.value / ttlTotal) * 100).toFixed(0) : 0}%)
+                </span>
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
 
       {hasCostGroups && (
         <Section
