@@ -1,15 +1,22 @@
 import type { Session } from '@/lib/adapters/types'
 import { MessageBubble } from './MessageBubble'
 import { formatBytes } from '@/lib/format'
-
-function Empty({ text }: { text: string }) {
-  return (
-    <div className="flex h-full items-center justify-center text-sm text-neutral-600">{text}</div>
-  )
-}
+import { EmptyState, Skeleton } from '@/components/ui'
 
 function fmt(n?: number): string {
   return (n ?? 0).toLocaleString()
+}
+
+function LoadingConversation() {
+  return (
+    <div className="h-full space-y-4 px-6 py-6">
+      <Skeleton className="h-5 w-1/3" />
+      <Skeleton className="h-16 w-2/3" />
+      <Skeleton className="ml-auto h-12 w-1/2" />
+      <Skeleton className="h-24 w-3/4" />
+      <Skeleton className="ml-auto h-10 w-2/5" />
+    </div>
+  )
 }
 
 export function ConversationView({
@@ -21,9 +28,23 @@ export function ConversationView({
   loading: boolean
   hasSelection: boolean
 }) {
-  if (!hasSelection) return <Empty text="← 왼쪽에서 세션을 선택하세요" />
-  if (loading) return <Empty text="불러오는 중…" />
-  if (!session) return <Empty text="세션을 불러올 수 없습니다." />
+  if (!hasSelection)
+    return (
+      <EmptyState
+        icon="💬"
+        title="왼쪽에서 세션을 선택하세요"
+        description="llmctl은 로컬의 Claude·Cursor·Codex 세션을 읽기 전용으로 보여줍니다. 원본 파일은 변경되지 않습니다."
+      />
+    )
+  if (loading) return <LoadingConversation />
+  if (!session)
+    return (
+      <EmptyState
+        icon="⚠️"
+        title="세션을 불러올 수 없습니다."
+        description="파일이 이동·삭제됐거나 형식을 읽지 못했을 수 있습니다."
+      />
+    )
 
   // Mark messages where the model changed mid-session.
   const rows: { m: (typeof session.messages)[number]; switchedTo?: string }[] = []
@@ -40,15 +61,15 @@ export function ConversationView({
 
   return (
     <div className="flex h-full flex-col">
-      <header className="border-b border-neutral-800 px-6 py-3">
-        <h1 className="truncate text-base font-semibold">{session.title}</h1>
-        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-neutral-500">
-          <span className="font-mono text-neutral-400">{session.provider}</span>
+      <header className="border-b border-border px-6 py-3">
+        <h1 className="truncate text-base font-semibold text-fg-strong">{session.title}</h1>
+        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-subtle">
+          <span className="font-mono text-fg-muted">{session.provider}</span>
           <span className="truncate">{session.projectPath}</span>
           {models.length > 0 && (
             <span className="flex flex-wrap gap-1">
               {models.map((m) => (
-                <span key={m} className="rounded bg-neutral-800 px-1.5 py-0.5 font-mono text-neutral-300">
+                <span key={m} className="rounded bg-surface-2 px-1.5 py-0.5 font-mono text-fg-muted">
                   {m}
                 </span>
               ))}
@@ -56,11 +77,11 @@ export function ConversationView({
           )}
           <span>· {session.messages.length} msgs</span>
           {hasTokens ? (
-            <span className="font-mono text-neutral-400" title="세션 토큰 합계">
+            <span className="font-mono text-fg-muted" title="세션 토큰 합계">
               · 🪙 ↑{fmt(u!.inputTokens)} ↓{fmt(u!.outputTokens)}
             </span>
           ) : (
-            <span className="text-neutral-700" title="이 제공자는 토큰 사용량을 기록하지 않습니다">
+            <span className="text-fg-faint" title="이 제공자는 토큰 사용량을 기록하지 않습니다">
               · tokens —
             </span>
           )}
@@ -73,11 +94,11 @@ export function ConversationView({
         </div>
       )}
       <div className="flex-1 space-y-3 overflow-y-auto px-6 py-4">
-        {rows.length === 0 && <Empty text="표시할 메시지가 없습니다." />}
+        {rows.length === 0 && <EmptyState title="표시할 메시지가 없습니다." />}
         {rows.map(({ m, switchedTo }, i) => (
           <div key={`${m.id}-${i}`}>
             {switchedTo && (
-              <div className="my-2 flex items-center gap-2 text-[11px] text-amber-400/80">
+              <div className="my-2 flex items-center gap-2 text-2xs text-amber-400/80">
                 <span className="h-px flex-1 bg-amber-500/20" />
                 ↪ 모델 변경: <span className="font-mono">{switchedTo}</span>
                 <span className="h-px flex-1 bg-amber-500/20" />

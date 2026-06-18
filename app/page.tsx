@@ -114,19 +114,20 @@ export default function Home() {
     }
   }
 
-  const tabBtn = (v: 'sessions' | 'usage', label: string) =>
+  const tabBtn = (v: 'sessions' | 'usage') =>
     `rounded px-3 py-1 text-xs font-medium ${
-      view === v ? 'bg-neutral-800 text-neutral-100' : 'text-neutral-500 hover:text-neutral-300'
+      view === v ? 'bg-surface-2 text-fg-strong' : 'text-fg-subtle hover:text-fg-muted'
     }`
 
   return (
     <main className="flex h-screen flex-col overflow-hidden">
-      <div className="flex items-center gap-1 border-b border-neutral-800 bg-neutral-950 px-3 py-1.5">
-        <span className="mr-2 text-xs font-semibold text-neutral-400">llmctl</span>
-        <button type="button" onClick={() => setView('sessions')} className={tabBtn('sessions', '')}>
+      <div className="flex items-center gap-2 border-b border-border bg-bg px-3 py-1.5">
+        <span className="text-xs font-semibold text-fg-strong">llmctl</span>
+        <span className="mr-1 hidden text-2xs text-fg-faint sm:inline">로컬 LLM 세션·사용량 뷰어</span>
+        <button type="button" onClick={() => setView('sessions')} className={tabBtn('sessions')}>
           💬 세션
         </button>
-        <button type="button" onClick={() => setView('usage')} className={tabBtn('usage', '')}>
+        <button type="button" onClick={() => setView('usage')} className={tabBtn('usage')}>
           📊 사용량
         </button>
       </div>
