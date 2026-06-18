@@ -16,6 +16,7 @@ export default function Home() {
   const [session, setSession] = useState<Session | null>(null)
   const [loadingSession, setLoadingSession] = useState(false)
   const [view, setView] = useState<'sessions' | 'usage'>('sessions')
+  const [trashPreview, setTrashPreview] = useState(false)
 
   useEffect(() => {
     fetch('/api/providers')
@@ -57,10 +58,12 @@ export default function Home() {
     setActive(p)
     setSelected(null)
     setSession(null)
+    setTrashPreview(false)
   }
 
   async function onSelect(s: SessionSummary) {
     setSelected(s)
+    setTrashPreview(false)
     setSession(null)
     setLoadingSession(true)
     try {
@@ -92,6 +95,22 @@ export default function Home() {
       }
     } catch {
       window.alert('삭제에 실패했습니다.')
+    }
+  }
+
+  async function onViewTrash(item: { id: string }) {
+    setSelected(null)
+    setSession(null)
+    setTrashPreview(true)
+    setLoadingSession(true)
+    try {
+      const r = await fetch(`/api/trash/view?id=${encodeURIComponent(item.id)}`)
+      const d = await r.json()
+      setSession(d.session ?? null)
+    } catch {
+      setSession(null)
+    } finally {
+      setLoadingSession(false)
     }
   }
 
@@ -127,9 +146,21 @@ export default function Home() {
               onSelect={onSelect}
               onDelete={onDelete}
               onRestored={loadSessions}
+              onViewTrash={onViewTrash}
             />
-            <div className="flex-1 overflow-hidden">
-              <ConversationView session={session} loading={loadingSession} hasSelection={!!selected} />
+            <div className="flex flex-1 flex-col overflow-hidden">
+              {trashPreview && (
+                <div className="border-b border-amber-500/30 bg-amber-500/10 px-3 py-1 text-[11px] text-amber-300">
+                  🗑 휴지통 미리보기 · 읽기 전용 (복원하면 원래 위치로 돌아갑니다)
+                </div>
+              )}
+              <div className="flex-1 overflow-hidden">
+                <ConversationView
+                  session={session}
+                  loading={loadingSession}
+                  hasSelection={!!selected || trashPreview}
+                />
+              </div>
             </div>
           </div>
         </>

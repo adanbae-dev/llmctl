@@ -20,6 +20,7 @@ export function SessionSidebar({
   onSelect,
   onDelete,
   onRestored,
+  onViewTrash,
 }: {
   sessions: SessionSummary[]
   loading: boolean
@@ -27,6 +28,7 @@ export function SessionSidebar({
   onSelect: (s: SessionSummary) => void
   onDelete: (s: SessionSummary) => void
   onRestored?: () => void
+  onViewTrash?: (item: TrashItem) => void
 }) {
   const [q, setQ] = useState('')
   const [showArchived, setShowArchived] = useState(true)
@@ -151,6 +153,13 @@ export function SessionSidebar({
                       </button>
                     ) : (
                       <>
+                        <button
+                          type="button"
+                          onClick={() => onViewTrash?.(t)}
+                          className="rounded border border-neutral-700 px-2 py-0.5 text-[11px] text-neutral-300 hover:bg-neutral-800"
+                        >
+                          보기
+                        </button>
                         <button
                           type="button"
                           disabled={!t.restorable}

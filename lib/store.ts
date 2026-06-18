@@ -118,6 +118,20 @@ export async function listTrash(): Promise<TrashItem[]> {
   return items
 }
 
+/** Resolve a trashed file's on-disk path from its manifest id (for read-only preview). */
+export async function resolveTrashFile(id: string): Promise<{ provider: string; path: string } | null> {
+  const e = (await readManifest()).find((x) => x.id === id)
+  if (!e) return null
+  const p = path.join(TRASH_DIR, e.provider, e.id)
+  if (!isWithin(TRASH_DIR, p)) return null
+  try {
+    await fs.access(p)
+  } catch {
+    return null
+  }
+  return { provider: e.provider, path: p }
+}
+
 /** Restore a trashed file to its original location (never clobbers, stays in-root). */
 export async function restoreTrash(id: string): Promise<string> {
   const entries = await readManifest()
