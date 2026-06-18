@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react'
 import type { SessionSummary } from '@/lib/adapters/types'
 import { relativeTime, formatBytes } from '@/lib/format'
+import { Badge, EmptyState, Skeleton } from '@/components/ui'
 
 interface TrashItem {
   kind: 'file' | 'hidden'
@@ -11,6 +12,16 @@ interface TrashItem {
   name: string
   deletedAt?: number
   restorable: boolean
+}
+
+function ListSkeleton() {
+  return (
+    <div className="space-y-2 p-3">
+      {Array.from({ length: 7 }).map((_, i) => (
+        <Skeleton key={i} className="h-12" />
+      ))}
+    </div>
+  )
 }
 
 export function SessionSidebar({
@@ -84,15 +95,15 @@ export function SessionSidebar({
   }
 
   return (
-    <aside className="flex h-full w-80 shrink-0 flex-col border-r border-neutral-800 bg-neutral-950">
-      <div className="border-b border-neutral-800 p-3">
+    <aside className="flex h-full w-80 shrink-0 flex-col border-r border-border bg-bg">
+      <div className="border-b border-border p-3">
         <div className="mb-2 flex items-center justify-between">
-          <span className="text-[11px] font-medium text-neutral-500">{trashMode ? '🗑 휴지통' : '세션'}</span>
+          <span className="text-2xs font-medium text-fg-subtle">{trashMode ? '🗑 휴지통' : '세션'}</span>
           <button
             type="button"
             onClick={toggleTrash}
-            className={`rounded px-2 py-0.5 text-[11px] ${
-              trashMode ? 'bg-neutral-800 text-neutral-200' : 'text-neutral-500 hover:text-neutral-300'
+            className={`rounded px-2 py-0.5 text-2xs ${
+              trashMode ? 'bg-surface-2 text-fg-muted' : 'text-fg-subtle hover:text-fg-muted'
             }`}
           >
             {trashMode ? '← 목록' : '🗑 휴지통'}
@@ -104,17 +115,17 @@ export function SessionSidebar({
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="검색 (제목 · 프로젝트)"
-              className="w-full rounded-md border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-xs outline-none focus:border-neutral-600"
+              className="w-full rounded-md border border-border bg-surface-2 px-3 py-1.5 text-xs outline-none focus:border-brand"
             />
             {archivedCount > 0 && (
-              <label className="mt-2 flex items-center gap-1.5 text-[11px] text-neutral-500">
+              <label className="mt-2 flex items-center gap-1.5 text-2xs text-fg-subtle">
                 <input
                   type="checkbox"
                   checked={showArchived}
                   onChange={(e) => setShowArchived(e.target.checked)}
-                  className="accent-amber-500"
+                  className="accent-brand"
                 />
-                보관본 포함 <span className="text-neutral-600">({archivedCount})</span>
+                보관본 포함 <span className="text-fg-faint">({archivedCount})</span>
               </label>
             )}
           </>
@@ -123,23 +134,19 @@ export function SessionSidebar({
       <div className="flex-1 overflow-y-auto">
         {trashMode ? (
           trashLoading ? (
-            <p className="p-4 text-xs text-neutral-600">불러오는 중…</p>
+            <ListSkeleton />
           ) : trash.length === 0 ? (
-            <p className="p-4 text-xs text-neutral-600">휴지통이 비어 있습니다.</p>
+            <EmptyState icon="🗑" title="휴지통이 비어 있습니다." />
           ) : (
             <ul>
               {trash.map((t) => (
-                <li key={`${t.provider}:${t.id}`} className="border-b border-neutral-900 px-3 py-2">
-                  <div className="truncate text-xs text-neutral-300" title={t.name}>
+                <li key={`${t.provider}:${t.id}`} className="border-b border-border/60 px-3 py-2">
+                  <div className="truncate text-xs text-fg-muted" title={t.name}>
                     {t.name}
                   </div>
-                  <div className="mt-0.5 flex items-center gap-2 text-[10px] text-neutral-600">
+                  <div className="mt-0.5 flex items-center gap-2 text-2xs text-fg-faint">
                     <span className="font-mono">{t.provider}</span>
-                    {t.kind === 'hidden' ? (
-                      <span className="rounded bg-sky-500/15 px-1 text-sky-400">숨김</span>
-                    ) : (
-                      <span className="rounded bg-red-500/15 px-1 text-red-400">휴지통</span>
-                    )}
+                    {t.kind === 'hidden' ? <Badge tone="info">숨김</Badge> : <Badge tone="danger">휴지통</Badge>}
                     {t.deletedAt != null && <span>{relativeTime(new Date(t.deletedAt).toISOString())}</span>}
                   </div>
                   <div className="mt-1.5 flex gap-1.5">
@@ -147,7 +154,7 @@ export function SessionSidebar({
                       <button
                         type="button"
                         onClick={() => act(t, 'unhide')}
-                        className="rounded border border-neutral-700 px-2 py-0.5 text-[11px] text-neutral-300 hover:bg-neutral-800"
+                        className="rounded border border-border-strong px-2 py-0.5 text-2xs text-fg-muted hover:bg-surface-2"
                       >
                         숨김 해제
                       </button>
@@ -156,7 +163,7 @@ export function SessionSidebar({
                         <button
                           type="button"
                           onClick={() => onViewTrash?.(t)}
-                          className="rounded border border-neutral-700 px-2 py-0.5 text-[11px] text-neutral-300 hover:bg-neutral-800"
+                          className="rounded border border-border-strong px-2 py-0.5 text-2xs text-fg-muted hover:bg-surface-2"
                         >
                           보기
                         </button>
@@ -165,14 +172,14 @@ export function SessionSidebar({
                           disabled={!t.restorable}
                           onClick={() => act(t, 'restore')}
                           title={t.restorable ? '원래 위치로 복원' : '원본 경로 정보 없음 (복원 불가)'}
-                          className="rounded border border-neutral-700 px-2 py-0.5 text-[11px] text-emerald-300 hover:bg-neutral-800 disabled:opacity-40"
+                          className="rounded border border-border-strong px-2 py-0.5 text-2xs text-data-output hover:bg-surface-2 disabled:opacity-40"
                         >
                           복원
                         </button>
                         <button
                           type="button"
                           onClick={() => act(t, 'purge')}
-                          className="rounded border border-neutral-700 px-2 py-0.5 text-[11px] text-red-400 hover:bg-neutral-800"
+                          className="rounded border border-border-strong px-2 py-0.5 text-2xs text-danger hover:bg-surface-2"
                         >
                           영구삭제
                         </button>
@@ -185,25 +192,31 @@ export function SessionSidebar({
           )
         ) : (
           <>
-            {loading && <p className="p-4 text-xs text-neutral-600">불러오는 중…</p>}
+            {loading && <ListSkeleton />}
             {!loading && filtered.length === 0 && (
-              <p className="p-4 text-xs text-neutral-600">세션이 없습니다.</p>
+              <EmptyState
+                icon="🗂"
+                title={q ? '검색 결과가 없습니다.' : '표시할 세션이 없습니다.'}
+                description={
+                  q
+                    ? undefined
+                    : 'llmctl은 로컬의 Claude·Cursor·Codex 세션을 읽기 전용으로 보여줍니다. 다른 제공자 탭을 확인해 보세요.'
+                }
+              />
             )}
             <ul>
               {filtered.map((s) => (
-                <li key={s.id} className="group relative border-b border-neutral-900">
+                <li key={s.id} className="group relative border-b border-border/60">
                   <button
                     type="button"
                     onClick={() => onSelect(s)}
-                    className={`block w-full px-3 py-2 pr-8 text-left hover:bg-neutral-900 ${
-                      selectedId === s.id ? 'bg-neutral-900' : ''
+                    className={`block w-full px-3 py-2 pr-8 text-left hover:bg-surface ${
+                      selectedId === s.id ? 'bg-surface-2' : ''
                     }`}
                   >
-                    <div className="truncate text-xs font-medium text-neutral-200">
-                      {s.title || '(untitled)'}
-                    </div>
-                    <div className="mt-0.5 truncate text-[11px] text-neutral-500">{s.projectPath}</div>
-                    <div className="mt-0.5 flex gap-2 text-[10px] text-neutral-600">
+                    <div className="truncate text-xs font-medium text-fg-strong">{s.title || '(untitled)'}</div>
+                    <div className="mt-0.5 truncate text-2xs text-fg-subtle">{s.projectPath}</div>
+                    <div className="mt-0.5 flex gap-2 text-2xs text-fg-faint">
                       {s.archived && (
                         <span className="rounded bg-amber-500/15 px-1 font-medium text-amber-400">보관본</span>
                       )}
@@ -219,7 +232,7 @@ export function SessionSidebar({
                       onDelete(s)
                     }}
                     title={s.provider === 'cursor' ? '목록에서 숨김' : '휴지통으로 이동'}
-                    className="absolute right-1.5 top-1.5 hidden rounded p-1 text-sm text-neutral-500 hover:bg-neutral-800 hover:text-red-400 group-hover:block"
+                    className="absolute right-1.5 top-1.5 hidden rounded p-1 text-sm text-fg-subtle hover:bg-surface-2 hover:text-danger group-hover:block"
                   >
                     🗑
                   </button>
