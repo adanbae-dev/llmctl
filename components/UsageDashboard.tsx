@@ -11,6 +11,7 @@ import { ToolsSection } from './usage/ToolsSection'
 import { ActivitySection } from './usage/ActivitySection'
 import { SessionsSection } from './usage/SessionsSection'
 import { CompareSection } from './usage/CompareSection'
+import { SecuritySection } from './usage/SecuritySection'
 
 type Provider = 'claude' | 'cursor' | 'codex'
 const PROVIDERS: { id: Provider; label: string }[] = [
@@ -26,6 +27,7 @@ const TABS = [
   { id: 'activity', label: '활동' },
   { id: 'sessions', label: '세션' },
   { id: 'compare', label: '비교' },
+  { id: 'security', label: '보안' },
 ] as const
 type Tab = (typeof TABS)[number]['id']
 
@@ -42,6 +44,8 @@ const EMPTY_INSIGHTS: Insights = {
   activityByDate: [],
   sessions: [],
   cacheTtl: { ttl5m: 0, ttl1h: 0 },
+  secrets: [],
+  secretSessions: 0,
 }
 
 export function UsageDashboard() {
@@ -101,6 +105,8 @@ export function UsageDashboard() {
           activityByDate: d.activityByDate ?? [],
           sessions: d.sessions ?? [],
           cacheTtl: d.cacheTtl ?? { ttl5m: 0, ttl1h: 0 },
+          secrets: d.secrets ?? [],
+          secretSessions: d.secretSessions ?? 0,
         })
         setModels(ms)
         setSel(new Set(ms))
@@ -453,6 +459,13 @@ export function UsageDashboard() {
           )}
           {tab === 'sessions' && <SessionsSection sessions={insights.sessions} />}
           {tab === 'compare' && <CompareSection />}
+          {tab === 'security' && (
+            <SecuritySection
+              provider={provider}
+              secrets={insights.secrets}
+              secretSessions={insights.secretSessions}
+            />
+          )}
         </>
       )}
     </div>

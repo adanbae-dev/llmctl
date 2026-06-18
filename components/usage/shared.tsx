@@ -59,6 +59,8 @@ export interface Insights {
   activity: number[][]
   activityByDate: { date: string; count: number }[]
   sessions: SessionStat[]
+  secrets: CountRow[]
+  secretSessions: number
 }
 
 export type Totals = { input: number; output: number; cacheRead: number; cacheCreate: number; messages: number }

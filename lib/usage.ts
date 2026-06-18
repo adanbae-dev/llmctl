@@ -78,6 +78,8 @@ export interface ScanResult {
   activityByDate?: { date: string; count: number }[] // per calendar day, chronological
   sessions?: SessionStat[] // union of top-N by cost and top-N by size
   cacheTtl?: { ttl5m: number; ttl1h: number } // cache-creation tokens by TTL (Claude), whole-dataset
+  secrets?: CountRow[] // pattern-based secret/PII match counts (Claude), whole-dataset
+  secretSessions?: number // sessions with >=1 suspected match
 }
 
 function safeParse(l: string): Record<string, unknown> | null {
@@ -132,6 +134,21 @@ function activityDateOut(m: Map<string, number>): { date: string; count: number 
 
 /** File-touching tools whose input.file_path feeds the "hot files" insight. */
 const FILE_TOOLS = new Set(['Read', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+
+// Pattern-based secret/PII detection over raw session text. Best-effort and
+// regex-only → may include false positives; surfaced as "추정" in the UI. Helps
+// users spot credentials accidentally left in their own local session logs.
+const SECRET_PATTERNS: { label: string; re: RegExp }[] = [
+  { label: 'AI API 키 (sk-…)', re: /sk-(?:ant-)?[A-Za-z0-9_-]{20,}/g },
+  { label: 'GitHub 토큰', re: /\b(?:ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}/g },
+  { label: 'AWS 액세스 키', re: /\bAKIA[0-9A-Z]{16}\b/g },
+  { label: 'Google API 키', re: /\bAIza[0-9A-Za-z_-]{35}\b/g },
+  { label: 'Slack 토큰', re: /\bxox[baprs]-[0-9A-Za-z-]{10,}/g },
+  { label: '개인키 블록', re: /-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----/g },
+  { label: 'JWT 토큰', re: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g },
+  { label: 'API키/시크릿 할당', re: /(?:api[_-]?key|secret|token|password|passwd)["']?\s*[:=]\s*["'][^"'\s]{12,}["']/gi },
+  { label: '이메일 (PII)', re: /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g },
+]
 
 function bucket(agg: Map<string, UsageRow>, date: string, model: string): UsageRow {
   const key = `${date}|${model}`
@@ -274,6 +291,8 @@ async function scanClaude(): Promise<ScanResult> {
   const toolErr = new Map<string, { total: number; errors: number }>()
   let ttl5m = 0
   let ttl1h = 0
+  const secrets = new Map<string, number>()
+  let secretSessions = 0
   const activity = newActivity()
   const activityDate = new Map<string, number>()
   const sessionStats: SessionStat[] = []
@@ -382,6 +401,15 @@ async function scanClaude(): Promise<ScanResult> {
         const s2 = t2.startsWith('mcp__') ? t2.split('__').slice(2).join('__') || t2 : t2
         countInc(toolSeq, `${s1} → ${s2}`)
       }
+      let fileHadSecret = false
+      for (const { label, re } of SECRET_PATTERNS) {
+        const m = buf.match(re)
+        if (m && m.length) {
+          secrets.set(label, (secrets.get(label) ?? 0) + m.length)
+          fileHadSecret = true
+        }
+      }
+      if (fileHadSecret) secretSessions += 1
       if (fileDate) {
         sessionStats.push({
           id: encodeId(fp),
@@ -408,6 +436,8 @@ async function scanClaude(): Promise<ScanResult> {
     toolSeq: countsOut(toolSeq),
     toolErrors: toolErrorsOut(toolErr),
     cacheTtl: { ttl5m, ttl1h },
+    secrets: countsOut(secrets),
+    secretSessions,
     activity,
     activityByDate: activityDateOut(activityDate),
     sessions: topSessions(sessionStats),
