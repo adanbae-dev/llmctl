@@ -6,6 +6,7 @@ export function ToolsSection({
   hasTools,
   toolGroups,
   toolErrors,
+  toolSeq,
   skills,
   subagents,
   stopReasons,
@@ -14,13 +15,14 @@ export function ToolsSection({
   hasTools: boolean
   toolGroups: ToolGroups
   toolErrors: ToolErrorRow[]
+  toolSeq: CountRow[]
   skills: CountRow[]
   subagents: CountRow[]
   stopReasons: CountRow[]
   hotFiles: CountRow[]
 }) {
   const hasWorkflowInsights =
-    skills.length > 0 || subagents.length > 0 || stopReasons.length > 0 || hotFiles.length > 0
+    skills.length > 0 || subagents.length > 0 || stopReasons.length > 0 || hotFiles.length > 0 || toolSeq.length > 0
   return (
     <div className="space-y-6">
       <Section title="🔧 도구 사용">
@@ -150,6 +152,11 @@ export function ToolsSection({
               total={hotFiles.reduce((s, x) => s + x.count, 0)}
               items={hotFiles.map((c) => ({ label: shortPath(c.key), title: c.key, value: c.count }))}
               color="bg-blue-500"
+            />
+            <BarList
+              title="도구 연쇄 (자주 쓰는 흐름)"
+              items={toolSeq.map((c) => ({ label: c.key, value: c.count }))}
+              color="bg-emerald-500"
             />
           </div>
         </Section>

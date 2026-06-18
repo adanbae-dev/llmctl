@@ -53,6 +53,7 @@ export interface Insights {
   skills: CountRow[]
   subagents: CountRow[]
   hotFiles: CountRow[]
+  toolSeq: CountRow[]
   toolErrors: ToolErrorRow[]
   activity: number[][]
   activityByDate: { date: string; count: number }[]

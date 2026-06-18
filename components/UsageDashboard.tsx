@@ -34,6 +34,7 @@ const EMPTY_INSIGHTS: Insights = {
   skills: [],
   subagents: [],
   hotFiles: [],
+  toolSeq: [],
   toolErrors: [],
   activity: [],
   activityByDate: [],
@@ -91,6 +92,7 @@ export function UsageDashboard() {
           skills: d.skills ?? [],
           subagents: d.subagents ?? [],
           hotFiles: d.hotFiles ?? [],
+          toolSeq: d.toolSeq ?? [],
           toolErrors: d.toolErrors ?? [],
           activity: d.activity ?? [],
           activityByDate: d.activityByDate ?? [],
@@ -423,6 +425,7 @@ export function UsageDashboard() {
               hasTools={toolUsage.length > 0}
               toolGroups={toolGroups}
               toolErrors={insights.toolErrors}
+              toolSeq={insights.toolSeq}
               skills={insights.skills}
               subagents={insights.subagents}
               stopReasons={insights.stopReasons}

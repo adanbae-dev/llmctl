@@ -72,6 +72,7 @@ export interface ScanResult {
   skills?: CountRow[]
   subagents?: CountRow[]
   hotFiles?: CountRow[]
+  toolSeq?: CountRow[] // consecutive tool-call pairs ("A → B"), whole-dataset
   toolErrors?: ToolErrorRow[]
   activity?: number[][] // 7 (Sun–Sat) × 24 (hour-of-day) message counts
   activityByDate?: { date: string; count: number }[] // per calendar day, chronological
@@ -268,6 +269,7 @@ async function scanClaude(): Promise<ScanResult> {
   const skills = new Map<string, number>()
   const subs = new Map<string, number>()
   const hotFiles = new Map<string, number>()
+  const toolSeq = new Map<string, number>()
   const toolErr = new Map<string, { total: number; errors: number }>()
   const activity = newActivity()
   const activityDate = new Map<string, number>()
@@ -280,6 +282,7 @@ async function scanClaude(): Promise<ScanResult> {
     // tool_result lines carry only tool_use_id; map it back to the tool name
     // emitted earlier in the same file (tool_use always precedes its result).
     const idToName = new Map<string, string>()
+    const fileTools: string[] = []
     let fileCost = 0
     let fileCwd = ''
     let fileDate = ''
@@ -327,6 +330,7 @@ async function scanClaude(): Promise<ScanResult> {
               const tu = b as Record<string, unknown>
               const name = String(tu.name || 'tool')
               toolBucket(tools, date, name)
+              fileTools.push(name)
               if (tu.id) idToName.set(String(tu.id), name)
               if (FILE_TOOLS.has(name)) {
                 const inp = tu.input as Record<string, unknown> | undefined
@@ -362,6 +366,14 @@ async function scanClaude(): Promise<ScanResult> {
           if (d.isSidechain === true) countInc(subs, d.agentName ? String(d.agentName) : '(subagent)')
         }
       }
+      // Consecutive tool-call pairs within this session → workflow sequences.
+      for (let i = 1; i < fileTools.length; i++) {
+        const t1 = fileTools[i - 1]
+        const t2 = fileTools[i]
+        const s1 = t1.startsWith('mcp__') ? t1.split('__').slice(2).join('__') || t1 : t1
+        const s2 = t2.startsWith('mcp__') ? t2.split('__').slice(2).join('__') || t2 : t2
+        countInc(toolSeq, `${s1} → ${s2}`)
+      }
       if (fileDate) {
         sessionStats.push({
           id: encodeId(fp),
@@ -385,6 +397,7 @@ async function scanClaude(): Promise<ScanResult> {
     skills: countsOut(skills),
     subagents: countsOut(subs),
     hotFiles: countsOut(hotFiles),
+    toolSeq: countsOut(toolSeq),
     toolErrors: toolErrorsOut(toolErr),
     activity,
     activityByDate: activityDateOut(activityDate),
