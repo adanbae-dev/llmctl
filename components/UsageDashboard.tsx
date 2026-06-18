@@ -10,6 +10,7 @@ import { CostSection } from './usage/CostSection'
 import { ToolsSection } from './usage/ToolsSection'
 import { ActivitySection } from './usage/ActivitySection'
 import { SessionsSection } from './usage/SessionsSection'
+import { CompareSection } from './usage/CompareSection'
 
 type Provider = 'claude' | 'cursor' | 'codex'
 const PROVIDERS: { id: Provider; label: string }[] = [
@@ -24,6 +25,7 @@ const TABS = [
   { id: 'tools', label: '도구·워크플로' },
   { id: 'activity', label: '활동' },
   { id: 'sessions', label: '세션' },
+  { id: 'compare', label: '비교' },
 ] as const
 type Tab = (typeof TABS)[number]['id']
 
@@ -450,6 +452,7 @@ export function UsageDashboard() {
             />
           )}
           {tab === 'sessions' && <SessionsSection sessions={insights.sessions} />}
+          {tab === 'compare' && <CompareSection />}
         </>
       )}
     </div>
