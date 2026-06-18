@@ -65,6 +65,7 @@ export interface ScanResult {
   hotFiles?: CountRow[]
   toolErrors?: ToolErrorRow[]
   activity?: number[][] // 7 (Sun–Sat) × 24 (hour-of-day) message counts
+  activityByDate?: { date: string; count: number }[] // per calendar day, chronological
 }
 
 function safeParse(l: string): Record<string, unknown> | null {
@@ -108,6 +109,13 @@ function localHourDow(v: unknown): { hour: number; dow: number } | null {
 
 function newActivity(): number[][] {
   return Array.from({ length: 7 }, () => new Array<number>(24).fill(0))
+}
+
+/** Per-calendar-day counts, sorted chronologically (full range, no top-N cap). */
+function activityDateOut(m: Map<string, number>): { date: string; count: number }[] {
+  return [...m.entries()]
+    .map(([date, count]) => ({ date, count }))
+    .sort((a, b) => a.date.localeCompare(b.date))
 }
 
 /** File-touching tools whose input.file_path feeds the "hot files" insight. */
@@ -237,6 +245,7 @@ async function scanClaude(): Promise<ScanResult> {
   const hotFiles = new Map<string, number>()
   const toolErr = new Map<string, { total: number; errors: number }>()
   const activity = newActivity()
+  const activityDate = new Map<string, number>()
 
   const roots = [CLAUDE_PROJECTS, ARCHIVE_ROOTS.claude].filter(Boolean) as string[]
   const files = await dedupedFiles(roots, listClaudeFiles)
@@ -278,7 +287,10 @@ async function scanClaude(): Promise<ScanResult> {
         const date = toLocalDate(d.timestamp)
         if (!date) continue
         const hd = localHourDow(d.timestamp)
-        if (hd) activity[hd.dow][hd.hour] += 1
+        if (hd) {
+          activity[hd.dow][hd.hour] += 1
+          countInc(activityDate, date)
+        }
         const content = m.content
         if (Array.isArray(content)) {
           for (const b of content) {
@@ -334,6 +346,7 @@ async function scanClaude(): Promise<ScanResult> {
     hotFiles: countsOut(hotFiles),
     toolErrors: toolErrorsOut(toolErr),
     activity,
+    activityByDate: activityDateOut(activityDate),
   }
 }
 
@@ -372,11 +385,15 @@ async function scanCursor(): Promise<ScanResult> {
 
   const agg = new Map<string, UsageRow>()
   const activity = newActivity()
+  const activityDate = new Map<string, number>()
   for (const r of rows) {
     const date = toLocalDate(r.ts)
     if (!date) continue
     const hd = localHourDow(r.ts)
-    if (hd) activity[hd.dow][hd.hour] += 1
+    if (hd) {
+      activity[hd.dow][hd.hour] += 1
+      countInc(activityDate, date)
+    }
     const cid = String(r.k).split(':')[1]
     const model = (r.model ? String(r.model) : '') || composerModel.get(cid) || 'cursor'
     const row = bucket(agg, date, model)
@@ -384,7 +401,7 @@ async function scanCursor(): Promise<ScanResult> {
     row.output += Number(r.outp) || 0
     row.messages += 1
   }
-  return { rows: [...agg.values()], tools: [], activity }
+  return { rows: [...agg.values()], tools: [], activity, activityByDate: activityDateOut(activityDate) }
 }
 
 // ── Codex: token_count events (usage) + response_item function_call (tools);
@@ -446,6 +463,7 @@ async function scanCodex(): Promise<ScanResult> {
   const projects = new Map<string, GroupRow>()
   const branches = new Map<string, GroupRow>()
   const activity = newActivity()
+  const activityDate = new Map<string, number>()
 
   const roots = [CODEX_SESSIONS, ARCHIVE_ROOTS.codex].filter(Boolean) as string[]
   const files = await dedupedFiles(roots, (root) => walkCodex(root))
@@ -477,7 +495,10 @@ async function scanCodex(): Promise<ScanResult> {
       }
       if (!date) continue
       const hd = localHourDow(tsRaw)
-      if (hd) activity[hd.dow][hd.hour] += 1
+      if (hd) {
+        activity[hd.dow][hd.hour] += 1
+        countInc(activityDate, date)
+      }
       const stat = await fs.stat(fp)
       let allLines: string[]
       let tailLines: string[]
@@ -513,6 +534,7 @@ async function scanCodex(): Promise<ScanResult> {
     byProject: groupsOut(projects),
     byBranch: groupsOut(branches),
     activity,
+    activityByDate: activityDateOut(activityDate),
   }
 }
 

@@ -125,14 +125,15 @@ function BarList({
       </h3>
       <div className="space-y-1.5">
         {items.map((t, i) => (
-          <div key={`${t.title ?? t.label}-${i}`} className="flex items-center gap-2 text-xs">
-            <span className="w-40 shrink-0 truncate font-mono text-neutral-300" title={t.title ?? t.label}>
-              {t.label}
-            </span>
+          <div key={`${t.title ?? t.label}-${i}`} className="group relative flex items-center gap-2 text-xs">
+            <span className="w-40 shrink-0 truncate font-mono text-neutral-300">{t.label}</span>
             <div className="relative h-4 flex-1 overflow-hidden rounded bg-neutral-800/40">
               <div className={`h-full rounded ${color}`} style={{ width: `${Math.max((t.value / max) * 100, 2)}%` }} />
             </div>
             <span className="w-20 shrink-0 text-right tabular-nums text-neutral-400">{f(t.value)}</span>
+            <div className="pointer-events-none absolute bottom-full left-0 z-20 mb-1 hidden max-w-[90vw] whitespace-nowrap rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 font-mono text-[11px] text-neutral-200 shadow-lg group-hover:block">
+              {t.title ?? t.label} · {f(t.value)}
+            </div>
           </div>
         ))}
       </div>
@@ -148,20 +149,20 @@ function ActivityHeatmap({ data }: { data: number[][] }) {
     <div className="overflow-x-auto">
       <div className="inline-block">
         <div className="flex">
-          <div className="w-7 shrink-0" />
+          <div className="w-8 shrink-0" />
           {Array.from({ length: 24 }).map((_, h) => (
-            <div key={h} className="w-[14px] shrink-0 text-center text-[8px] text-neutral-600">
-              {h % 6 === 0 ? h : ''}
+            <div key={h} className="w-[22px] shrink-0 text-center text-[10px] text-neutral-600">
+              {h % 3 === 0 ? h : ''}
             </div>
           ))}
         </div>
         {data.map((row, dow) => (
           <div key={dow} className="flex items-center">
-            <div className="w-7 shrink-0 text-[10px] text-neutral-500">{DOW[dow]}</div>
+            <div className="w-8 shrink-0 text-[11px] text-neutral-500">{DOW[dow]}</div>
             {row.map((c, h) => (
               <div
                 key={h}
-                className="m-[1px] h-[12px] w-[12px] shrink-0 rounded-sm"
+                className="m-[1px] h-[20px] w-[20px] shrink-0 rounded-sm"
                 title={`${DOW[dow]}요일 ${h}시 · ${c.toLocaleString()}`}
                 style={{
                   backgroundColor:
@@ -171,6 +172,78 @@ function ActivityHeatmap({ data }: { data: number[][] }) {
             ))}
           </div>
         ))}
+      </div>
+    </div>
+  )
+}
+
+/** Calendar heatmap (GitHub-style): weeks as columns × 7 weekday rows, full date range. */
+function CalendarHeatmap({ data }: { data: { date: string; count: number }[] }) {
+  if (!data || data.length === 0) return null
+  const max = Math.max(1, ...data.map((d) => d.count))
+  const byDate = new Map(data.map((d) => [d.date, d.count]))
+  const parse = (s: string) => {
+    const [y, m, d] = s.split('-').map(Number)
+    return new Date(y, m - 1, d)
+  }
+  const fmtDate = (dt: Date) =>
+    `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
+  const start = parse(data[0].date)
+  const end = parse(data[data.length - 1].date)
+  const cur = new Date(start)
+  cur.setDate(cur.getDate() - cur.getDay()) // back to Sunday of the first week
+  const weeks: { date: string; count: number; inRange: boolean }[][] = []
+  while (cur <= end) {
+    const week: { date: string; count: number; inRange: boolean }[] = []
+    for (let i = 0; i < 7; i++) {
+      const ds = fmtDate(cur)
+      week.push({ date: ds, count: byDate.get(ds) ?? 0, inRange: cur >= start && cur <= end })
+      cur.setDate(cur.getDate() + 1)
+    }
+    weeks.push(week)
+  }
+  const monthOf = (w: { date: string; inRange: boolean }[]) => parse((w.find((d) => d.inRange) ?? w[0]).date).getMonth()
+  return (
+    <div className="overflow-x-auto">
+      <div className="inline-block">
+        <div className="flex pl-8">
+          {weeks.map((w, i) => {
+            const m = monthOf(w)
+            const show = i === 0 || monthOf(weeks[i - 1]) !== m
+            return (
+              <div key={i} className="w-[15px] shrink-0 text-[9px] text-neutral-500">
+                {show ? `${m + 1}월` : ''}
+              </div>
+            )
+          })}
+        </div>
+        <div className="flex">
+          <div className="mr-1 flex flex-col">
+            {DOW.map((d, i) => (
+              <div key={i} className="h-[15px] w-7 text-[9px] leading-[15px] text-neutral-500">
+                {i % 2 === 1 ? d : ''}
+              </div>
+            ))}
+          </div>
+          {weeks.map((week, wi) => (
+            <div key={wi} className="flex flex-col">
+              {week.map((d, di) => (
+                <div
+                  key={di}
+                  className="m-[1px] h-[13px] w-[13px] rounded-sm"
+                  title={d.inRange ? `${d.date} · ${d.count.toLocaleString()}` : ''}
+                  style={{
+                    backgroundColor: !d.inRange
+                      ? 'transparent'
+                      : d.count === 0
+                        ? 'rgba(255,255,255,0.04)'
+                        : `rgba(52,211,153,${0.15 + 0.85 * (d.count / max)})`,
+                  }}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   )
@@ -189,6 +262,7 @@ export function UsageDashboard() {
     hotFiles: CountRow[]
     toolErrors: ToolErrorRow[]
     activity: number[][]
+    activityByDate: { date: string; count: number }[]
   }>({
     byProject: [],
     byBranch: [],
@@ -198,8 +272,10 @@ export function UsageDashboard() {
     hotFiles: [],
     toolErrors: [],
     activity: [],
+    activityByDate: [],
   })
   const [insightMetric, setInsightMetric] = useState<'tokens' | 'cost'>('tokens')
+  const [heatmapView, setHeatmapView] = useState<'dow' | 'date'>('dow')
   const [showAllTools, setShowAllTools] = useState(false)
   const [models, setModels] = useState<string[]>([])
   const [sel, setSel] = useState<Set<string>>(new Set())
@@ -247,6 +323,7 @@ export function UsageDashboard() {
           hotFiles: d.hotFiles ?? [],
           toolErrors: d.toolErrors ?? [],
           activity: d.activity ?? [],
+          activityByDate: d.activityByDate ?? [],
         })
         setModels(ms)
         setSel(new Set(ms))
@@ -321,6 +398,9 @@ export function UsageDashboard() {
     () => insights.activity.some((row) => row.some((c) => c > 0)),
     [insights.activity],
   )
+  const activityRange = insights.activityByDate.length
+    ? `${insights.activityByDate[0].date} ~ ${insights.activityByDate[insights.activityByDate.length - 1].date}`
+    : '전체 기간'
 
   // byProject / byBranch bars, switched between token total and estimated $.
   const groupItems = (gs: GroupRow[], label: (g: GroupRow) => { label: string; title?: string }) =>
@@ -724,12 +804,41 @@ export function UsageDashboard() {
 
           {hasActivity && (
             <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
-              <h2 className="mb-1 text-sm font-medium text-neutral-300">🕒 활동 히트맵 (요일 × 시간)</h2>
-              <p className="mb-3 text-[11px] text-neutral-600">
-                {provider === 'claude' ? '응답 메시지 기준' : provider === 'codex' ? '세션 시작 기준' : '메시지 기준'} · 로컬
-                시간 · 전체 기간
-              </p>
-              <ActivityHeatmap data={insights.activity} />
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h2 className="text-sm font-medium text-neutral-300">🕒 활동 히트맵</h2>
+                  <p className="text-[11px] text-neutral-600">
+                    {provider === 'claude' ? '응답 메시지 기준' : provider === 'codex' ? '세션 시작 기준' : '메시지 기준'} ·
+                    로컬 시간 · {activityRange}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1 text-[11px]">
+                  {(
+                    [
+                      ['dow', '요일 × 시간'],
+                      ['date', '날짜별'],
+                    ] as const
+                  ).map(([v, label]) => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => setHeatmapView(v)}
+                      className={`rounded-full border px-2 py-0.5 ${
+                        heatmapView === v
+                          ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
+                          : 'border-neutral-700 text-neutral-500'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {heatmapView === 'dow' ? (
+                <ActivityHeatmap data={insights.activity} />
+              ) : (
+                <CalendarHeatmap data={insights.activityByDate} />
+              )}
             </div>
           )}
 
