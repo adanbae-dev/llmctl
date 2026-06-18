@@ -14,6 +14,8 @@ import {
   CartesianGrid,
 } from 'recharts'
 import { DateRangePicker } from './DateRangePicker'
+import { BarList, Section, Stat, Pill, Badge, InfoDot, EmptyState, Skeleton } from '@/components/ui'
+import { GLOSSARY } from '@/lib/glossary'
 import { estimateCostUSD, isApprox, ratesFor } from '@/lib/pricing'
 
 interface UsageRow {
@@ -68,6 +70,15 @@ const PROVIDERS: { id: Provider; label: string }[] = [
   { id: 'codex', label: 'Codex / GPT' },
 ]
 
+const TABS = [
+  { id: 'overview', label: '개요' },
+  { id: 'cost', label: '비용' },
+  { id: 'tools', label: '도구·워크플로' },
+  { id: 'activity', label: '활동' },
+  { id: 'sessions', label: '세션' },
+] as const
+type Tab = (typeof TABS)[number]['id']
+
 const fmt = (n: number) => n.toLocaleString()
 const usd = (n: number) => `$${n.toFixed(2)}`
 const DOW = ['일', '월', '화', '수', '목', '금', '토']
@@ -96,58 +107,9 @@ function toolColor(tool: string): string {
   return 'bg-neutral-500'
 }
 
-function Card({ label, value, accent }: { label: string; value: string; accent?: string }) {
-  return (
-    <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 px-4 py-3">
-      <div className="text-xs text-neutral-500">{label}</div>
-      <div className={`mt-1 text-xl font-semibold ${accent ?? 'text-neutral-100'}`}>{value}</div>
-    </div>
-  )
-}
-
 function shortPath(p: string): string {
   const parts = p.split('/').filter(Boolean)
   return parts.length <= 2 ? p : '…/' + parts.slice(-2).join('/')
-}
-
-function BarList({
-  title,
-  total,
-  items,
-  color = 'bg-sky-500',
-  fmtValue,
-}: {
-  title: string
-  total?: number
-  items: { label: string; value: number; title?: string }[]
-  color?: string
-  fmtValue?: (n: number) => string
-}) {
-  if (items.length === 0) return null
-  const max = items[0]?.value || 1
-  const f = fmtValue ?? ((n: number) => n.toLocaleString())
-  return (
-    <div>
-      <h3 className="mb-2 text-xs font-medium text-neutral-400">
-        {title}
-        {total != null && <span className="text-neutral-600"> · {total.toLocaleString()}</span>}
-      </h3>
-      <div className="space-y-1.5">
-        {items.map((t, i) => (
-          <div key={`${t.title ?? t.label}-${i}`} className="group relative flex items-center gap-2 text-xs">
-            <span className="w-40 shrink-0 truncate font-mono text-neutral-300">{t.label}</span>
-            <div className="relative h-4 flex-1 overflow-hidden rounded bg-neutral-800/40">
-              <div className={`h-full rounded ${color}`} style={{ width: `${Math.max((t.value / max) * 100, 2)}%` }} />
-            </div>
-            <span className="w-20 shrink-0 text-right tabular-nums text-neutral-400">{f(t.value)}</span>
-            <div className="pointer-events-none absolute bottom-full left-0 z-20 mb-1 hidden max-w-[90vw] whitespace-nowrap rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 font-mono text-[11px] text-neutral-200 shadow-lg group-hover:block">
-              {t.title ?? t.label} · {f(t.value)}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
 }
 
 /** Activity heatmap: 7 weekdays × 24 hours, intensity scaled to the busiest cell. */
@@ -260,6 +222,7 @@ function CalendarHeatmap({ data }: { data: { date: string; count: number }[] }) 
 
 export function UsageDashboard() {
   const [provider, setProvider] = useState<Provider>('claude')
+  const [tab, setTab] = useState<Tab>('overview')
   const [rows, setRows] = useState<UsageRow[]>([])
   const [tools, setTools] = useState<ToolRow[]>([])
   const [insights, setInsights] = useState<{
@@ -287,7 +250,6 @@ export function UsageDashboard() {
   })
   const [insightMetric, setInsightMetric] = useState<'tokens' | 'cost'>('tokens')
   const [heatmapView, setHeatmapView] = useState<'dow' | 'date'>('dow')
-  const [showAllTools, setShowAllTools] = useState(false)
   const [models, setModels] = useState<string[]>([])
   const [sel, setSel] = useState<Set<string>>(new Set())
   const [from, setFrom] = useState('')
@@ -317,7 +279,6 @@ export function UsageDashboard() {
 
   useEffect(() => {
     setLoading(true)
-    setShowAllTools(false)
     fetch(`/api/usage?provider=${provider}`)
       .then((r) => r.json())
       .then((d) => {
@@ -413,6 +374,21 @@ export function UsageDashboard() {
   const activityRange = insights.activityByDate.length
     ? `${insights.activityByDate[0].date} ~ ${insights.activityByDate[insights.activityByDate.length - 1].date}`
     : '전체 기간'
+
+  const busiestDow = useMemo(() => {
+    const a = insights.activity
+    if (!a.length) return null
+    let best = 0
+    let bestSum = -1
+    a.forEach((row, i) => {
+      const s = row.reduce((x, y) => x + y, 0)
+      if (s > bestSum) {
+        bestSum = s
+        best = i
+      }
+    })
+    return bestSum > 0 ? DOW[best] : null
+  }, [insights.activity])
 
   // Daily output tokens pivoted by model — stacked share-over-time (respects filters).
   const modelTrend = useMemo(() => {
@@ -537,12 +513,27 @@ export function UsageDashboard() {
     })
   }
 
+  const cacheHitRate = (
+    (totals.cacheRead / Math.max(totals.input + totals.cacheRead + totals.cacheCreate, 1)) * 100
+  ).toFixed(0)
+
+  const narrative = `이 기간 ${hasApprox ? '≈ ' : ''}$${totalCost.toFixed(2)} · 출력 ${fmt(totals.output)} 토큰${
+    busiestDow ? ` · 최다 활동 ${busiestDow}요일` : ''
+  }${insights.sessions.length ? ` · 주목 세션 ${insights.sessions.length}개 (세션 탭)` : ''}`
+
+  const hasWorkflowInsights =
+    insights.skills.length > 0 ||
+    insights.subagents.length > 0 ||
+    insights.stopReasons.length > 0 ||
+    insights.hotFiles.length > 0
+  const hasCostGroups = insights.byBranch.length > 0 || insights.byProject.length > 0
+
   return (
-    <div className="space-y-5 p-6">
+    <div className="space-y-6 p-6">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold">📊 토큰 사용량 · 비용</h1>
-          <p className="mt-0.5 text-xs text-neutral-500">제공자별 전 세션 합계 · 일자/모델 필터</p>
+          <h1 className="text-lg font-semibold text-fg-strong">📊 사용량 · 비용</h1>
+          <p className="mt-0.5 text-2xs text-fg-faint">제공자별 전 세션 합계 · 토큰 사용량과 추정 비용</p>
         </div>
         <div className="flex flex-col items-end gap-1">
           <button
@@ -550,14 +541,12 @@ export function UsageDashboard() {
             onClick={doBackup}
             disabled={backupBusy}
             title="Claude·Codex·Gemini 세션을 ~/.llmctl/archive 로 증분 백업 (원본은 읽기 전용)"
-            className="shrink-0 rounded-md border border-neutral-700 px-3 py-1.5 text-xs font-medium text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
+            className="shrink-0 rounded-md border border-border-strong px-3 py-1.5 text-xs font-medium text-fg-muted hover:bg-surface-2 disabled:opacity-50"
           >
             {backupBusy ? '백업 중…' : '💾 백업'}
           </button>
           {backupMsg && (
-            <span className={`text-[11px] ${backupErr ? 'text-red-400' : 'text-neutral-500'}`}>
-              {backupMsg}
-            </span>
+            <span className={`text-2xs ${backupErr ? 'text-danger' : 'text-fg-subtle'}`}>{backupMsg}</span>
           )}
         </div>
       </div>
@@ -570,9 +559,7 @@ export function UsageDashboard() {
             type="button"
             onClick={() => setProvider(p.id)}
             className={`rounded-md px-3 py-1.5 text-xs font-medium ${
-              provider === p.id
-                ? 'bg-neutral-800 text-neutral-100'
-                : 'text-neutral-500 hover:text-neutral-300'
+              provider === p.id ? 'bg-surface-2 text-fg-strong' : 'text-fg-subtle hover:text-fg-muted'
             }`}
           >
             {p.label}
@@ -581,14 +568,24 @@ export function UsageDashboard() {
       </div>
 
       {loading ? (
-        <div className="py-16 text-center text-sm text-neutral-600">집계 중…</div>
-      ) : rows.length === 0 ? (
-        <div className="py-16 text-center text-sm text-neutral-600">
-          이 제공자는 토큰 사용량 데이터가 없습니다.
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-[68px]" />
+            ))}
+          </div>
+          <Skeleton className="h-72" />
         </div>
+      ) : rows.length === 0 ? (
+        <EmptyState
+          icon="📭"
+          title="이 제공자는 토큰 사용량 데이터가 없습니다."
+          description="다른 제공자를 선택하거나, 세션을 백업한 뒤 다시 확인하세요."
+        />
       ) : (
         <>
-          <div className="flex flex-wrap items-center gap-4 rounded-lg border border-neutral-800 bg-neutral-900/40 p-3 text-xs">
+          {/* filter bar — date range + model toggles (apply to token/cost/activity charts) */}
+          <div className="flex flex-wrap items-center gap-4 rounded-lg border border-border bg-surface p-3 text-xs">
             <div className="flex items-center gap-2">
               기간
               <DateRangePicker
@@ -611,8 +608,8 @@ export function UsageDashboard() {
                   onClick={() => toggle(m)}
                   className={`rounded-full border px-2 py-0.5 font-mono ${
                     sel.has(m)
-                      ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
-                      : 'border-neutral-700 text-neutral-500'
+                      ? 'border-brand/50 bg-brand/10 text-brand'
+                      : 'border-border-strong text-fg-subtle'
                   }`}
                 >
                   {m}
@@ -621,449 +618,470 @@ export function UsageDashboard() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-            <Card
-              label="추정 비용 (USD)"
-              value={`${hasApprox ? '≈ ' : ''}$${totalCost.toFixed(2)}`}
-              accent="text-amber-300"
-            />
-            <Card label="출력 토큰 (생성)" value={fmt(totals.output)} accent="text-emerald-300" />
-            <Card label="입력 토큰" value={fmt(totals.input)} />
-            <Card label="캐시 read 토큰" value={fmt(totals.cacheRead)} />
-            <Card
-              label="캐시 적중률"
-              value={`${((totals.cacheRead / Math.max(totals.input + totals.cacheRead + totals.cacheCreate, 1)) * 100).toFixed(0)}%`}
-              accent="text-violet-300"
-            />
-            <Card label="메시지 수" value={fmt(totals.messages)} />
+          {/* subtab nav — progressive disclosure */}
+          <div className="flex flex-wrap gap-1.5">
+            {TABS.map((t) => (
+              <Pill key={t.id} active={tab === t.id} onClick={() => setTab(t.id)}>
+                {t.label}
+              </Pill>
+            ))}
           </div>
 
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-            <Card label="캐시 절약 (추정)" value={`≈ $${efficiency.saved.toFixed(2)}`} accent="text-emerald-300" />
-            <Card label="출력/입력 비율" value={efficiency.outIn.toFixed(3)} />
-            {truncation.total > 0 && (
-              <Card
-                label="잘림율 (max_tokens·전체)"
-                value={`${truncation.rate.toFixed(1)}%`}
-                accent={truncation.rate > 5 ? 'text-red-300' : undefined}
-              />
-            )}
-            {activityStats && (
-              <Card
-                label="최장 연속·활동일"
-                value={`${activityStats.longest}·${activityStats.activeDays}일`}
-                accent="text-violet-300"
-              />
-            )}
-            {activityStats && <Card label="가장 바쁜 날" value={activityStats.busiest.date} />}
-          </div>
-
-          <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
-            <h2 className="mb-3 text-sm font-medium text-neutral-300">일자별 토큰</h2>
-            <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
-              {(
-                [
-                  { key: 'output', label: '출력', on: 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300' },
-                  { key: 'input', label: '입력', on: 'border-blue-500/50 bg-blue-500/10 text-blue-300' },
-                  { key: 'cacheRead', label: '캐시read', on: 'border-violet-500/50 bg-violet-500/10 text-violet-300' },
-                ] as const
-              ).map((s) => (
-                <button
-                  key={s.key}
-                  type="button"
-                  onClick={() => setSeries((p) => ({ ...p, [s.key]: !p[s.key] }))}
-                  className={`rounded-full border px-2 py-0.5 ${
-                    series[s.key] ? s.on : 'border-neutral-700 text-neutral-500'
-                  }`}
-                >
-                  {s.label}
-                </button>
-              ))}
-              <span className="text-[11px] text-neutral-600">
-                캐시 read는 출력·입력보다 보통 10~100배 커서 기본 비표시
-              </span>
-            </div>
-            <div className="h-72 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={perDay} margin={{ top: 4, right: 8, left: 8, bottom: 4 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#262626" />
-                  <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#888' }} />
-                  <YAxis
-                    tick={{ fontSize: 11, fill: '#888' }}
-                    tickFormatter={(v: number) => (v >= 1000 ? `${Math.round(v / 1000)}k` : String(v))}
+          {/* ─── OVERVIEW ─── */}
+          {tab === 'overview' && (
+            <div className="space-y-4">
+              <div className="grid gap-3 lg:grid-cols-[1.3fr_2.7fr]">
+                <Stat
+                  size="lg"
+                  tone="cost"
+                  label={
+                    <>
+                      추정 비용 (USD)
+                      <InfoDot label={hasApprox ? `${GLOSSARY.cost} ${GLOSSARY.costApprox}` : GLOSSARY.cost} />
+                      <Badge tone="cost">추정</Badge>
+                    </>
+                  }
+                  value={`${hasApprox ? '≈ ' : ''}$${totalCost.toFixed(2)}`}
+                />
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+                  <Stat
+                    tone="output"
+                    label="출력 토큰 (생성)"
+                    value={fmt(totals.output)}
+                    hint={<InfoDot label={GLOSSARY.output} />}
                   />
-                  <Tooltip
-                    contentStyle={{ background: '#171717', border: '1px solid #333', borderRadius: 8, fontSize: 12 }}
-                    formatter={(v) => fmt(Number(v) || 0)}
+                  <Stat label="입력 토큰" value={fmt(totals.input)} hint={<InfoDot label={GLOSSARY.input} />} />
+                  <Stat label="캐시 read" value={fmt(totals.cacheRead)} hint={<InfoDot label={GLOSSARY.cacheRead} />} />
+                  <Stat
+                    tone="cache"
+                    label="캐시 적중률"
+                    value={`${cacheHitRate}%`}
+                    hint={<InfoDot label={GLOSSARY.cacheHit} />}
                   />
-                  <Legend wrapperStyle={{ fontSize: 12 }} />
-                  {series.output && <Bar dataKey="output" name="출력" stackId="a" fill="#34d399" />}
-                  {series.input && <Bar dataKey="input" name="입력" stackId="a" fill="#60a5fa" />}
-                  {series.cacheRead && <Bar dataKey="cacheRead" name="캐시read" stackId="a" fill="#a78bfa" />}
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
+                  <Stat label="메시지 수" value={fmt(totals.messages)} />
+                </div>
+              </div>
 
-          {costTrend.length > 1 && (
-            <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
-              <h2 className="mb-1 text-sm font-medium text-neutral-300">💲 비용 추이 (추정)</h2>
-              <p className="mb-3 text-[11px] text-neutral-600">
-                일일 비용 · 7일 이동평균(좌축) · 누적(우축) — 위 기간·모델 필터 반영
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+                <Stat
+                  tone="output"
+                  label="캐시 절약 (추정)"
+                  value={`≈ $${efficiency.saved.toFixed(2)}`}
+                  hint={<InfoDot label={GLOSSARY.cacheSaved} />}
+                />
+                <Stat
+                  label="출력/입력 비율"
+                  value={efficiency.outIn.toFixed(3)}
+                  hint={<InfoDot label={GLOSSARY.outInRatio} />}
+                />
+                {truncation.total > 0 && (
+                  <Stat
+                    tone={truncation.rate > 5 ? 'danger' : 'default'}
+                    label="잘림율 (max_tokens·전체)"
+                    value={`${truncation.rate.toFixed(1)}%`}
+                    hint={<InfoDot label={GLOSSARY.truncation} />}
+                  />
+                )}
+                {activityStats && (
+                  <Stat tone="cache" label="최장 연속·활동일" value={`${activityStats.longest}·${activityStats.activeDays}일`} />
+                )}
+                {activityStats && <Stat label="가장 바쁜 날" value={activityStats.busiest.date} />}
+              </div>
+
+              <p className="text-2xs leading-relaxed text-fg-subtle">
+                {narrative}. 비용은 추정치이며 ‘≈’는 단가 미검증을 뜻합니다.
               </p>
-              <div className="h-72 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={costTrend} margin={{ top: 4, right: 8, left: 8, bottom: 4 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#262626" />
-                    <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#888' }} />
-                    <YAxis
-                      yAxisId="left"
-                      tick={{ fontSize: 11, fill: '#888' }}
-                      tickFormatter={(v: number) => `$${v < 10 ? v.toFixed(1) : Math.round(v)}`}
-                    />
-                    <YAxis
-                      yAxisId="right"
-                      orientation="right"
-                      tick={{ fontSize: 11, fill: '#888' }}
-                      tickFormatter={(v: number) => `$${Math.round(v)}`}
-                    />
-                    <Tooltip
-                      contentStyle={{ background: '#171717', border: '1px solid #333', borderRadius: 8, fontSize: 12 }}
-                      formatter={(v) => usd(Number(v) || 0)}
-                    />
-                    <Legend wrapperStyle={{ fontSize: 12 }} />
-                    <Bar yAxisId="left" dataKey="cost" name="일일 비용" fill="#fbbf24" />
-                    <Line yAxisId="left" dataKey="avg7" name="7일 평균" stroke="#34d399" strokeWidth={2} dot={false} />
-                    <Line yAxisId="right" dataKey="cumulative" name="누적" stroke="#a78bfa" strokeWidth={2} dot={false} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
             </div>
           )}
 
-          {models.length > 1 && modelTrend.length > 0 && (
-            <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
-              <h2 className="mb-1 text-sm font-medium text-neutral-300">📈 모델 점유율 추이</h2>
-              <p className="mb-3 text-[11px] text-neutral-600">일자별 출력(생성) 토큰을 모델별로 누적 · 기간·모델 필터 반영</p>
-              <div className="h-72 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={modelTrend} margin={{ top: 4, right: 8, left: 8, bottom: 4 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#262626" />
-                    <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#888' }} />
-                    <YAxis
-                      tick={{ fontSize: 11, fill: '#888' }}
-                      tickFormatter={(v: number) => (v >= 1000 ? `${Math.round(v / 1000)}k` : String(v))}
-                    />
-                    <Tooltip
-                      contentStyle={{ background: '#171717', border: '1px solid #333', borderRadius: 8, fontSize: 12 }}
-                      formatter={(v) => fmt(Number(v) || 0)}
-                    />
-                    <Legend wrapperStyle={{ fontSize: 12 }} />
-                    {models
-                      .filter((mm) => sel.has(mm))
-                      .map((mm) => (
-                        <Bar
-                          key={mm}
-                          dataKey={(row) => Number(row[mm]) || 0}
-                          name={mm}
-                          stackId="m"
-                          fill={MODEL_COLORS[models.indexOf(mm) % MODEL_COLORS.length]}
+          {/* ─── COST ─── */}
+          {tab === 'cost' && (
+            <div className="space-y-6">
+              {costTrend.length > 1 && (
+                <Section
+                  title={
+                    <span className="inline-flex items-center gap-1">
+                      💲 비용 추이 <Badge tone="cost">추정</Badge>
+                    </span>
+                  }
+                  description="일일 비용 · 7일 이동평균(좌축) · 누적(우축) — 위 기간·모델 필터 반영"
+                  actions={<InfoDot label={GLOSSARY.estimateMethod} />}
+                >
+                  <div className="h-72 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart data={costTrend} margin={{ top: 4, right: 8, left: 8, bottom: 4 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#262626" />
+                        <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#888' }} />
+                        <YAxis
+                          yAxisId="left"
+                          tick={{ fontSize: 11, fill: '#888' }}
+                          tickFormatter={(v: number) => `$${v < 10 ? v.toFixed(1) : Math.round(v)}`}
                         />
-                      ))}
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          )}
+                        <YAxis
+                          yAxisId="right"
+                          orientation="right"
+                          tick={{ fontSize: 11, fill: '#888' }}
+                          tickFormatter={(v: number) => `$${Math.round(v)}`}
+                        />
+                        <Tooltip
+                          contentStyle={{ background: '#171717', border: '1px solid #333', borderRadius: 8, fontSize: 12 }}
+                          formatter={(v) => usd(Number(v) || 0)}
+                        />
+                        <Legend wrapperStyle={{ fontSize: 12 }} />
+                        <Bar yAxisId="left" dataKey="cost" name="일일 비용" fill="#fbbf24" />
+                        <Line yAxisId="left" dataKey="avg7" name="7일 평균" stroke="#34d399" strokeWidth={2} dot={false} />
+                        <Line yAxisId="right" dataKey="cumulative" name="누적" stroke="#a78bfa" strokeWidth={2} dot={false} />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
+                </Section>
+              )}
 
-          <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
-            <h2 className="mb-3 text-sm font-medium text-neutral-300">모델별</h2>
-            <table className="w-full text-left text-xs">
-              <thead className="text-neutral-500">
-                <tr>
-                  <th className="py-1">모델</th>
-                  <th className="py-1 text-right">출력</th>
-                  <th className="py-1 text-right">입력</th>
-                  <th className="py-1 text-right">메시지</th>
-                  <th className="py-1 text-right">추정 비용</th>
-                </tr>
-              </thead>
-              <tbody>
-                {perModel.map((m) => (
-                  <tr key={m.model} className="border-t border-neutral-800/60">
-                    <td className="py-1 font-mono text-neutral-300">{m.model}</td>
-                    <td className="py-1 text-right text-emerald-300">{fmt(m.output)}</td>
-                    <td className="py-1 text-right text-neutral-400">{fmt(m.input)}</td>
-                    <td className="py-1 text-right text-neutral-400">{fmt(m.messages)}</td>
-                    <td className="py-1 text-right text-amber-300">
-                      {m.approx ? '≈ ' : ''}${m.cost.toFixed(2)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
-            <h2 className="mb-3 text-sm font-medium text-neutral-300">🔧 도구 사용</h2>
-            {toolUsage.length === 0 ? (
-              <p className="text-xs text-neutral-600">이 제공자는 도구 호출 데이터가 없습니다.</p>
-            ) : (
-              <>
-              <div className="grid gap-6 md:grid-cols-2">
-                {/* built-in tools */}
-                <div>
-                  <h3 className="mb-2 text-xs font-medium text-neutral-400">
-                    기본 도구 <span className="text-neutral-600">· {fmt(toolGroups.builtinTotal)}</span>
-                  </h3>
-                  {toolGroups.builtin.length === 0 ? (
-                    <p className="text-[11px] text-neutral-600">없음</p>
-                  ) : (
-                    <div className="space-y-1.5">
-                      {toolGroups.builtin.map((t) => (
-                        <div key={t.tool} className="flex items-center gap-2 text-xs">
-                          <span className="w-32 shrink-0 truncate font-mono text-neutral-300" title={t.tool}>
-                            {t.tool}
-                          </span>
-                          <div className="relative h-4 flex-1 overflow-hidden rounded bg-neutral-800/40">
-                            <div
-                              className={`h-full rounded ${toolColor(t.tool)}`}
-                              style={{ width: `${Math.max((t.count / toolGroups.builtinMax) * 100, 2)}%` }}
+              {models.length > 1 && modelTrend.length > 0 && (
+                <Section
+                  title="📈 모델 점유율 추이"
+                  description="일자별 출력(생성) 토큰을 모델별로 누적 · 기간·모델 필터 반영"
+                >
+                  <div className="h-72 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={modelTrend} margin={{ top: 4, right: 8, left: 8, bottom: 4 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#262626" />
+                        <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#888' }} />
+                        <YAxis
+                          tick={{ fontSize: 11, fill: '#888' }}
+                          tickFormatter={(v: number) => (v >= 1000 ? `${Math.round(v / 1000)}k` : String(v))}
+                        />
+                        <Tooltip
+                          contentStyle={{ background: '#171717', border: '1px solid #333', borderRadius: 8, fontSize: 12 }}
+                          formatter={(v) => fmt(Number(v) || 0)}
+                        />
+                        <Legend wrapperStyle={{ fontSize: 12 }} />
+                        {models
+                          .filter((mm) => sel.has(mm))
+                          .map((mm) => (
+                            <Bar
+                              key={mm}
+                              dataKey={(row) => Number(row[mm]) || 0}
+                              name={mm}
+                              stackId="m"
+                              fill={MODEL_COLORS[models.indexOf(mm) % MODEL_COLORS.length]}
                             />
-                          </div>
-                          <span className="w-12 shrink-0 text-right tabular-nums text-neutral-400">
-                            {fmt(t.count)}
-                          </span>
-                        </div>
+                          ))}
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </Section>
+              )}
+
+              <Section title="모델별">
+                <table className="w-full text-left text-xs">
+                  <thead className="text-fg-subtle">
+                    <tr>
+                      <th className="py-1">모델</th>
+                      <th className="py-1 text-right">출력</th>
+                      <th className="py-1 text-right">입력</th>
+                      <th className="py-1 text-right">메시지</th>
+                      <th className="py-1 text-right">추정 비용</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {perModel.map((m) => (
+                      <tr key={m.model} className="border-t border-border/60">
+                        <td className="py-1 font-mono text-fg-muted">{m.model}</td>
+                        <td className="py-1 text-right text-data-output">{fmt(m.output)}</td>
+                        <td className="py-1 text-right text-fg-muted">{fmt(m.input)}</td>
+                        <td className="py-1 text-right text-fg-muted">{fmt(m.messages)}</td>
+                        <td className="py-1 text-right text-data-cost">
+                          {m.approx ? '≈ ' : ''}${m.cost.toFixed(2)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </Section>
+
+              {hasCostGroups && (
+                <Section
+                  title="🧭 프로젝트 · 브랜치"
+                  description={GLOSSARY.wholeRange}
+                  actions={
+                    <div className="flex items-center gap-1">
+                      {(['tokens', 'cost'] as const).map((mt) => (
+                        <Pill key={mt} active={insightMetric === mt} onClick={() => setInsightMetric(mt)}>
+                          {mt === 'tokens' ? '토큰' : '비용'}
+                        </Pill>
                       ))}
                     </div>
-                  )}
-                </div>
+                  }
+                >
+                  <div className="grid gap-6 md:grid-cols-2">
+                    <BarList
+                      title={insightMetric === 'cost' ? '브랜치별 비용 (추정 USD)' : '브랜치별 토큰'}
+                      items={groupItems(insights.byBranch, (g) => ({ label: g.key }))}
+                      color="bg-emerald-500"
+                      fmtValue={insightMetric === 'cost' ? usd : undefined}
+                    />
+                    <BarList
+                      title={insightMetric === 'cost' ? '프로젝트별 비용 (추정 USD)' : '프로젝트별 토큰'}
+                      items={groupItems(insights.byProject, (g) => ({ label: shortPath(g.key), title: g.key }))}
+                      color="bg-sky-500"
+                      fmtValue={insightMetric === 'cost' ? usd : undefined}
+                    />
+                  </div>
+                </Section>
+              )}
+            </div>
+          )}
 
-                {/* MCP tools, grouped by server */}
-                <div>
-                  <h3 className="mb-2 text-xs font-medium text-neutral-400">
-                    MCP 도구 <span className="text-neutral-600">· {fmt(toolGroups.mcpTotal)}</span>
-                  </h3>
-                  {toolGroups.servers.length === 0 ? (
-                    <p className="text-[11px] text-neutral-600">MCP 도구 호출 없음</p>
-                  ) : (
-                    <div className="space-y-3">
-                      {toolGroups.servers.map((s) => (
-                        <div key={s.server}>
-                          <div className="mb-1 flex items-center gap-1.5 text-[11px]">
-                            <span className="font-mono text-fuchsia-300">{s.server}</span>
-                            <span className="text-neutral-600">· {fmt(s.total)}</span>
-                          </div>
+          {/* ─── TOOLS / WORKFLOW ─── */}
+          {tab === 'tools' && (
+            <div className="space-y-6">
+              <Section title="🔧 도구 사용">
+                {toolUsage.length === 0 ? (
+                  <p className="text-2xs text-fg-faint">이 제공자는 도구 호출 데이터가 없습니다.</p>
+                ) : (
+                  <>
+                    <div className="grid gap-6 md:grid-cols-2">
+                      <div>
+                        <h3 className="mb-2 text-xs font-medium text-fg-muted">
+                          기본 도구 <span className="text-fg-faint">· {fmt(toolGroups.builtinTotal)}</span>
+                        </h3>
+                        {toolGroups.builtin.length === 0 ? (
+                          <p className="text-2xs text-fg-faint">없음</p>
+                        ) : (
                           <div className="space-y-1.5">
-                            {s.tools.map((x) => (
-                              <div key={x.name} className="flex items-center gap-2 text-xs">
-                                <span
-                                  className="w-32 shrink-0 truncate font-mono text-neutral-400"
-                                  title={x.name}
-                                >
-                                  {x.name}
+                            {toolGroups.builtin.map((t) => (
+                              <div key={t.tool} className="flex items-center gap-2 text-xs">
+                                <span className="w-32 shrink-0 truncate font-mono text-fg-muted" title={t.tool}>
+                                  {t.tool}
                                 </span>
                                 <div className="relative h-4 flex-1 overflow-hidden rounded bg-neutral-800/40">
                                   <div
-                                    className="h-full rounded bg-fuchsia-500"
-                                    style={{ width: `${Math.max((x.count / toolGroups.mcpMax) * 100, 2)}%` }}
+                                    className={`h-full rounded ${toolColor(t.tool)}`}
+                                    style={{ width: `${Math.max((t.count / toolGroups.builtinMax) * 100, 2)}%` }}
                                   />
                                 </div>
-                                <span className="w-12 shrink-0 text-right tabular-nums text-neutral-400">
-                                  {fmt(x.count)}
-                                </span>
+                                <span className="w-12 shrink-0 text-right tabular-nums text-fg-muted">{fmt(t.count)}</span>
                               </div>
                             ))}
                           </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <h3 className="mb-2 text-xs font-medium text-fg-muted">
+                          MCP 도구 <span className="text-fg-faint">· {fmt(toolGroups.mcpTotal)}</span>
+                        </h3>
+                        {toolGroups.servers.length === 0 ? (
+                          <p className="text-2xs text-fg-faint">MCP 도구 호출 없음</p>
+                        ) : (
+                          <div className="space-y-3">
+                            {toolGroups.servers.map((s) => (
+                              <div key={s.server}>
+                                <div className="mb-1 flex items-center gap-1.5 text-2xs">
+                                  <span className="font-mono text-data-mcp">{s.server}</span>
+                                  <span className="text-fg-faint">· {fmt(s.total)}</span>
+                                </div>
+                                <div className="space-y-1.5">
+                                  {s.tools.map((x) => (
+                                    <div key={x.name} className="flex items-center gap-2 text-xs">
+                                      <span className="w-32 shrink-0 truncate font-mono text-fg-subtle" title={x.name}>
+                                        {x.name}
+                                      </span>
+                                      <div className="relative h-4 flex-1 overflow-hidden rounded bg-neutral-800/40">
+                                        <div
+                                          className="h-full rounded bg-fuchsia-500"
+                                          style={{ width: `${Math.max((x.count / toolGroups.mcpMax) * 100, 2)}%` }}
+                                        />
+                                      </div>
+                                      <span className="w-12 shrink-0 text-right tabular-nums text-fg-muted">
+                                        {fmt(x.count)}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    {insights.toolErrors.some((t) => t.errors > 0) && (
+                      <div className="mt-5 border-t border-border pt-4">
+                        <h3 className="mb-2 flex items-center gap-1 text-xs font-medium text-fg-muted">
+                          ⚠️ 도구 오류율
+                          <span className="text-fg-faint">· 차단·실패 결과 / 전체 결과</span>
+                          <InfoDot label={GLOSSARY.toolError} />
+                        </h3>
+                        <div className="grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
+                          {insights.toolErrors
+                            .filter((t) => t.errors > 0)
+                            .slice(0, 12)
+                            .map((t) => {
+                              const rate = t.total ? (t.errors / t.total) * 100 : 0
+                              return (
+                                <div key={t.tool} className="flex items-center gap-2 text-xs">
+                                  <span className="w-32 shrink-0 truncate font-mono text-fg-muted" title={t.tool}>
+                                    {t.tool}
+                                  </span>
+                                  <div className="relative h-4 flex-1 overflow-hidden rounded bg-neutral-800/40">
+                                    <div className="h-full rounded bg-red-500/70" style={{ width: `${Math.max(rate, 2)}%` }} />
+                                  </div>
+                                  <span className="w-20 shrink-0 text-right tabular-nums text-fg-muted">
+                                    {fmt(t.errors)}/{fmt(t.total)} ({rate.toFixed(0)}%)
+                                  </span>
+                                </div>
+                              )
+                            })}
                         </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </Section>
+
+              {hasWorkflowInsights && (
+                <Section title="🧭 워크플로 인사이트" description={GLOSSARY.wholeRange}>
+                  <div className="grid gap-6 md:grid-cols-2">
+                    <BarList
+                      title="스킬 · 슬래시 커맨드"
+                      total={insights.skills.reduce((s, x) => s + x.count, 0)}
+                      items={insights.skills.map((c) => ({ label: c.key, value: c.count }))}
+                      color="bg-amber-500"
+                    />
+                    <BarList
+                      title="서브에이전트"
+                      total={insights.subagents.reduce((s, x) => s + x.count, 0)}
+                      items={insights.subagents.map((c) => ({ label: c.key, value: c.count }))}
+                      color="bg-fuchsia-500"
+                    />
+                    <BarList
+                      title="종료 사유 (stop_reason)"
+                      items={insights.stopReasons.map((c) => ({ label: c.key, value: c.count }))}
+                      color="bg-neutral-500"
+                    />
+                    <BarList
+                      title="자주 연 파일 (Read·Edit·Write)"
+                      total={insights.hotFiles.reduce((s, x) => s + x.count, 0)}
+                      items={insights.hotFiles.map((c) => ({ label: shortPath(c.key), title: c.key, value: c.count }))}
+                      color="bg-blue-500"
+                    />
+                  </div>
+                </Section>
+              )}
+            </div>
+          )}
+
+          {/* ─── ACTIVITY ─── */}
+          {tab === 'activity' && (
+            <div className="space-y-6">
+              <Section
+                title="일자별 토큰"
+                actions={
+                  <div className="flex flex-wrap items-center gap-2">
+                    {(
+                      [
+                        { key: 'output', label: '출력' },
+                        { key: 'input', label: '입력' },
+                        { key: 'cacheRead', label: '캐시read' },
+                      ] as const
+                    ).map((s) => (
+                      <Pill
+                        key={s.key}
+                        active={series[s.key]}
+                        onClick={() => setSeries((p) => ({ ...p, [s.key]: !p[s.key] }))}
+                      >
+                        {s.label}
+                      </Pill>
+                    ))}
+                  </div>
+                }
+              >
+                <p className="mb-3 text-2xs text-fg-faint">캐시 read는 출력·입력보다 보통 10~100배 커서 기본 비표시</p>
+                <div className="h-72 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={perDay} margin={{ top: 4, right: 8, left: 8, bottom: 4 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#262626" />
+                      <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#888' }} />
+                      <YAxis
+                        tick={{ fontSize: 11, fill: '#888' }}
+                        tickFormatter={(v: number) => (v >= 1000 ? `${Math.round(v / 1000)}k` : String(v))}
+                      />
+                      <Tooltip
+                        contentStyle={{ background: '#171717', border: '1px solid #333', borderRadius: 8, fontSize: 12 }}
+                        formatter={(v) => fmt(Number(v) || 0)}
+                      />
+                      <Legend wrapperStyle={{ fontSize: 12 }} />
+                      {series.output && <Bar dataKey="output" name="출력" stackId="a" fill="#34d399" />}
+                      {series.input && <Bar dataKey="input" name="입력" stackId="a" fill="#60a5fa" />}
+                      {series.cacheRead && <Bar dataKey="cacheRead" name="캐시read" stackId="a" fill="#a78bfa" />}
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </Section>
+
+              {hasActivity && (
+                <Section
+                  title="🕒 활동 히트맵"
+                  description={`${
+                    provider === 'claude' ? '응답 메시지 기준' : provider === 'codex' ? '세션 시작 기준' : '메시지 기준'
+                  } · 로컬 시간 · ${activityRange}`}
+                  actions={
+                    <div className="flex items-center gap-1">
+                      {(
+                        [
+                          ['dow', '요일 × 시간'],
+                          ['date', '날짜별'],
+                        ] as const
+                      ).map(([v, label]) => (
+                        <Pill key={v} active={heatmapView === v} onClick={() => setHeatmapView(v)}>
+                          {label}
+                        </Pill>
                       ))}
                     </div>
+                  }
+                >
+                  {heatmapView === 'dow' ? (
+                    <ActivityHeatmap data={insights.activity} />
+                  ) : (
+                    <CalendarHeatmap data={insights.activityByDate} />
                   )}
-                </div>
-              </div>
-              {insights.toolErrors.some((t) => t.errors > 0) && (
-                <div className="mt-5 border-t border-neutral-800 pt-4">
-                  <h3 className="mb-2 text-xs font-medium text-neutral-400">
-                    ⚠️ 도구 오류율 <span className="text-neutral-600">· 차단·실패 결과 / 전체 결과 (차단된 hook 호출 포함)</span>
-                  </h3>
-                  <div className="grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
-                    {insights.toolErrors
-                      .filter((t) => t.errors > 0)
-                      .slice(0, 12)
-                      .map((t) => {
-                        const rate = t.total ? (t.errors / t.total) * 100 : 0
-                        return (
-                          <div key={t.tool} className="flex items-center gap-2 text-xs">
-                            <span className="w-32 shrink-0 truncate font-mono text-neutral-300" title={t.tool}>
-                              {t.tool}
-                            </span>
-                            <div className="relative h-4 flex-1 overflow-hidden rounded bg-neutral-800/40">
-                              <div
-                                className="h-full rounded bg-red-500/70"
-                                style={{ width: `${Math.max(rate, 2)}%` }}
-                              />
-                            </div>
-                            <span className="w-20 shrink-0 text-right tabular-nums text-neutral-400">
-                              {fmt(t.errors)}/{fmt(t.total)} ({rate.toFixed(0)}%)
-                            </span>
-                          </div>
-                        )
-                      })}
-                  </div>
-                </div>
-              )}
-              </>
-            )}
-          </div>
-
-          {hasActivity && (
-            <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <h2 className="text-sm font-medium text-neutral-300">🕒 활동 히트맵</h2>
-                  <p className="text-[11px] text-neutral-600">
-                    {provider === 'claude' ? '응답 메시지 기준' : provider === 'codex' ? '세션 시작 기준' : '메시지 기준'} ·
-                    로컬 시간 · {activityRange}
-                  </p>
-                </div>
-                <div className="flex items-center gap-1 text-[11px]">
-                  {(
-                    [
-                      ['dow', '요일 × 시간'],
-                      ['date', '날짜별'],
-                    ] as const
-                  ).map(([v, label]) => (
-                    <button
-                      key={v}
-                      type="button"
-                      onClick={() => setHeatmapView(v)}
-                      className={`rounded-full border px-2 py-0.5 ${
-                        heatmapView === v
-                          ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
-                          : 'border-neutral-700 text-neutral-500'
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              {heatmapView === 'dow' ? (
-                <ActivityHeatmap data={insights.activity} />
-              ) : (
-                <CalendarHeatmap data={insights.activityByDate} />
+                </Section>
               )}
             </div>
           )}
 
-          {insights.sessions.length > 0 && (
-            <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
-              <h2 className="mb-1 text-sm font-medium text-neutral-300">🗂 세션 Top-N (정리 후보)</h2>
-              <p className="mb-3 text-[11px] text-neutral-600">전체 기간 · 세션 = 파일 1개 · 삭제는 💬 세션 탭에서</p>
-              <div className="grid gap-6 md:grid-cols-2">
-                <BarList
-                  title="가장 비싼 세션 (추정 USD)"
-                  items={[...insights.sessions]
-                    .sort((a, b) => b.cost - a.cost)
-                    .slice(0, 15)
-                    .map((s) => ({ label: `${shortPath(s.project)} · ${s.date}`, title: s.project, value: s.cost }))}
-                  color="bg-amber-500"
-                  fmtValue={usd}
-                />
-                <BarList
-                  title="가장 큰 세션 (용량)"
-                  items={[...insights.sessions]
-                    .sort((a, b) => b.sizeBytes - a.sizeBytes)
-                    .slice(0, 15)
-                    .map((s) => ({ label: `${shortPath(s.project)} · ${s.date}`, title: s.project, value: s.sizeBytes }))}
-                  color="bg-rose-500"
-                  fmtValue={fmtBytes}
-                />
-              </div>
-            </div>
-          )}
-
-          {(insights.byBranch.length > 0 ||
-            insights.byProject.length > 0 ||
-            insights.stopReasons.length > 0 ||
-            insights.skills.length > 0 ||
-            insights.hotFiles.length > 0 ||
-            insights.subagents.length > 0) && (
-            <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-4">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <h2 className="text-sm font-medium text-neutral-300">🧭 세션 인사이트</h2>
-                  <p className="text-[11px] text-neutral-600">전체 기간 기준 (위 기간 필터와 무관)</p>
+          {/* ─── SESSIONS ─── */}
+          {tab === 'sessions' &&
+            (insights.sessions.length > 0 ? (
+              <Section title="🗂 세션 Top-N (정리 후보)" description="전체 기간 · 세션 = 파일 1개 · 삭제는 💬 세션 탭에서">
+                <div className="grid gap-6 md:grid-cols-2">
+                  <BarList
+                    title="가장 비싼 세션 (추정 USD)"
+                    items={[...insights.sessions]
+                      .sort((a, b) => b.cost - a.cost)
+                      .slice(0, 15)
+                      .map((s) => ({ label: `${shortPath(s.project)} · ${s.date}`, title: s.project, value: s.cost }))}
+                    color="bg-amber-500"
+                    fmtValue={usd}
+                  />
+                  <BarList
+                    title="가장 큰 세션 (용량)"
+                    items={[...insights.sessions]
+                      .sort((a, b) => b.sizeBytes - a.sizeBytes)
+                      .slice(0, 15)
+                      .map((s) => ({ label: `${shortPath(s.project)} · ${s.date}`, title: s.project, value: s.sizeBytes }))}
+                    color="bg-rose-500"
+                    fmtValue={fmtBytes}
+                  />
                 </div>
-                <div className="flex items-center gap-1 text-[11px]">
-                  <span className="text-neutral-600">프로젝트·브랜치:</span>
-                  {(['tokens', 'cost'] as const).map((mt) => (
-                    <button
-                      key={mt}
-                      type="button"
-                      onClick={() => setInsightMetric(mt)}
-                      className={`rounded-full border px-2 py-0.5 ${
-                        insightMetric === mt
-                          ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
-                          : 'border-neutral-700 text-neutral-500'
-                      }`}
-                    >
-                      {mt === 'tokens' ? '토큰' : '비용'}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="grid gap-6 md:grid-cols-2">
-                <BarList
-                  title={insightMetric === 'cost' ? '브랜치별 비용 (추정 USD)' : '브랜치별 토큰'}
-                  items={groupItems(insights.byBranch, (g) => ({ label: g.key }))}
-                  color="bg-emerald-500"
-                  fmtValue={insightMetric === 'cost' ? usd : undefined}
-                />
-                <BarList
-                  title={insightMetric === 'cost' ? '프로젝트별 비용 (추정 USD)' : '프로젝트별 토큰'}
-                  items={groupItems(insights.byProject, (g) => ({ label: shortPath(g.key), title: g.key }))}
-                  color="bg-sky-500"
-                  fmtValue={insightMetric === 'cost' ? usd : undefined}
-                />
-                <BarList
-                  title="스킬 · 슬래시 커맨드"
-                  total={insights.skills.reduce((s, x) => s + x.count, 0)}
-                  items={insights.skills.map((c) => ({ label: c.key, value: c.count }))}
-                  color="bg-amber-500"
-                />
-                <BarList
-                  title="서브에이전트"
-                  total={insights.subagents.reduce((s, x) => s + x.count, 0)}
-                  items={insights.subagents.map((c) => ({ label: c.key, value: c.count }))}
-                  color="bg-fuchsia-500"
-                />
-                <BarList
-                  title="종료 사유 (stop_reason)"
-                  items={insights.stopReasons.map((c) => ({ label: c.key, value: c.count }))}
-                  color="bg-neutral-500"
-                />
-                <BarList
-                  title="자주 연 파일 (Read·Edit·Write)"
-                  total={insights.hotFiles.reduce((s, x) => s + x.count, 0)}
-                  items={insights.hotFiles.map((c) => ({
-                    label: shortPath(c.key),
-                    title: c.key,
-                    value: c.count,
-                  }))}
-                  color="bg-blue-500"
-                />
-              </div>
-            </div>
-          )}
-
-          <p className="text-[11px] leading-relaxed text-neutral-600">
-            ⚠️ 입력 토큰은 매 턴 컨텍스트가 재전송되어 합계가 부풀려질 수 있습니다. 실제 “생성량”은 출력 토큰을 참고하세요.
-            <br />
-            💲 비용은 <b>추정치</b>입니다(캐시 read 0.1× · write 1.25×, 5분 TTL 가정).{' '}
-            <b>≈</b> 표시는 단가 미검증 모델(GPT/Gemini, 또는 Cursor처럼 모델 미기록 → Opus 단가 가정)이며 실제와 다를 수 있습니다 — 단가는 <code>lib/pricing.ts</code>에서 조정하세요.
-          </p>
+              </Section>
+            ) : (
+              <EmptyState
+                title="세션 인사이트가 없습니다"
+                description="이 제공자는 세션 단위 비용/용량 데이터를 제공하지 않습니다."
+              />
+            ))}
         </>
       )}
     </div>
