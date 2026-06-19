@@ -46,6 +46,7 @@ const EMPTY_INSIGHTS: Insights = {
   cacheTtl: { ttl5m: 0, ttl1h: 0 },
   secrets: [],
   secretSessions: 0,
+  secretHits: [],
 }
 
 export function UsageDashboard() {
@@ -107,6 +108,7 @@ export function UsageDashboard() {
           cacheTtl: d.cacheTtl ?? { ttl5m: 0, ttl1h: 0 },
           secrets: d.secrets ?? [],
           secretSessions: d.secretSessions ?? 0,
+          secretHits: d.secretHits ?? [],
         })
         setModels(ms)
         setSel(new Set(ms))
@@ -464,6 +466,7 @@ export function UsageDashboard() {
               provider={provider}
               secrets={insights.secrets}
               secretSessions={insights.secretSessions}
+              secretHits={insights.secretHits}
             />
           )}
         </>

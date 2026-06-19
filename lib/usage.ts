@@ -61,6 +61,17 @@ export interface SessionStat {
   sizeBytes: number
 }
 
+/** One suspected session for the secret/PII drill-down: per-type match
+ *  counts within a single session, so the Security tab can list the
+ *  sessions behind a selected match type. */
+export interface SecretHit {
+  id: string // base64url file locator (matches the session viewer's id)
+  project: string
+  date: string
+  types: CountRow[] // per-type suspected-match counts in this session
+  total: number // total suspected matches in this session
+}
+
 export interface ScanResult {
   rows: UsageRow[]
   tools: ToolRow[]
@@ -80,6 +91,7 @@ export interface ScanResult {
   cacheTtl?: { ttl5m: number; ttl1h: number } // cache-creation tokens by TTL (Claude), whole-dataset
   secrets?: CountRow[] // pattern-based secret/PII match counts (Claude), whole-dataset
   secretSessions?: number // sessions with >=1 suspected match
+  secretHits?: SecretHit[] // per-session suspected-match breakdown (Claude), top-N by total
 }
 
 function safeParse(l: string): Record<string, unknown> | null {
@@ -294,6 +306,7 @@ async function scanClaude(): Promise<ScanResult> {
   let ttl1h = 0
   const secrets = new Map<string, number>()
   let secretSessions = 0
+  const secretHits: SecretHit[] = []
   const activity = newActivity()
   const activityDate = new Map<string, number>()
   const sessionStats: SessionStat[] = []
@@ -402,7 +415,7 @@ async function scanClaude(): Promise<ScanResult> {
         const s2 = t2.startsWith('mcp__') ? t2.split('__').slice(2).join('__') || t2 : t2
         countInc(toolSeq, `${s1} → ${s2}`)
       }
-      let fileHadSecret = false
+      const fileSecrets = new Map<string, number>()
       for (const m of buf.matchAll(SECRET_RE)) {
         const g = m.groups
         if (!g) continue
@@ -410,12 +423,19 @@ async function scanClaude(): Promise<ScanResult> {
           if (g[key] !== undefined) {
             const label = SECRET_LABELS[key]
             secrets.set(label, (secrets.get(label) ?? 0) + 1)
-            fileHadSecret = true
+            fileSecrets.set(label, (fileSecrets.get(label) ?? 0) + 1)
             break
           }
         }
       }
-      if (fileHadSecret) secretSessions += 1
+      if (fileSecrets.size > 0) {
+        secretSessions += 1
+        const types = [...fileSecrets.entries()]
+          .map(([key, count]) => ({ key, count }))
+          .sort((a, b) => b.count - a.count)
+        const total = types.reduce((s, t) => s + t.count, 0)
+        secretHits.push({ id: encodeId(fp), project: fileCwd, date: fileDate, types, total })
+      }
       if (fileDate) {
         sessionStats.push({
           id: encodeId(fp),
@@ -444,6 +464,7 @@ async function scanClaude(): Promise<ScanResult> {
     cacheTtl: { ttl5m, ttl1h },
     secrets: countsOut(secrets),
     secretSessions,
+    secretHits: secretHits.sort((a, b) => b.total - a.total).slice(0, 100),
     activity,
     activityByDate: activityDateOut(activityDate),
     sessions: topSessions(sessionStats),

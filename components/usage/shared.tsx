@@ -46,6 +46,15 @@ export interface SessionStat {
   sizeBytes: number
 }
 
+/** One suspected session in the secret/PII drill-down, with per-type counts. */
+export interface SecretHit {
+  id: string
+  project: string
+  date: string
+  types: CountRow[]
+  total: number
+}
+
 export interface Insights {
   byProject: GroupRow[]
   byBranch: GroupRow[]
@@ -61,6 +70,7 @@ export interface Insights {
   sessions: SessionStat[]
   secrets: CountRow[]
   secretSessions: number
+  secretHits: SecretHit[]
 }
 
 export type Totals = { input: number; output: number; cacheRead: number; cacheCreate: number; messages: number }
