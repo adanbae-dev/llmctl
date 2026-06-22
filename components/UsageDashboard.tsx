@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { DateRangePicker } from './DateRangePicker'
 import { Pill, EmptyState, Skeleton } from '@/components/ui'
 import { estimateCostUSD, isApprox, ratesFor } from '@/lib/pricing'
+import { download, rowsToCsv } from '@/lib/exporters'
 import { fmt, fmtBytes, shortPath, DOW, type UsageRow, type ToolRow, type Insights } from './usage/shared'
 import { UsageOverview } from './usage/UsageOverview'
 import { CostSection } from './usage/CostSection'
@@ -459,6 +460,20 @@ export function UsageDashboard({
                 </button>
               ))}
             </div>
+            <button
+              type="button"
+              onClick={() =>
+                download(
+                  `llmctl-usage-${provider}-${from || bounds.min}_${to || bounds.max}.csv`,
+                  rowsToCsv(filtered),
+                  'text/csv',
+                )
+              }
+              title="현재 필터 기준 사용량을 CSV로 내보내기"
+              className="ml-auto rounded border border-border px-2 py-1 text-2xs text-fg-subtle transition-colors hover:border-brand/40 hover:text-brand"
+            >
+              ⬇ CSV
+            </button>
           </div>
 
           {/* subtab nav — progressive disclosure */}

@@ -5,6 +5,7 @@ import type { Session } from '@/lib/adapters/types'
 import { MessageBubble } from './MessageBubble'
 import { formatBytes } from '@/lib/format'
 import { EmptyState, Skeleton } from '@/components/ui'
+import { download, sessionToMarkdown, sessionToJson, safeName } from '@/lib/exporters'
 
 function fmt(n?: number): string {
   return (n ?? 0).toLocaleString()
@@ -99,7 +100,8 @@ export function ConversationView({
 
   return (
     <div className="flex h-full flex-col">
-      <header className="border-b border-border px-6 py-3">
+      <header className="flex items-start justify-between gap-3 border-b border-border px-6 py-3">
+        <div className="min-w-0">
         <h1 className="truncate text-base font-semibold text-fg-strong">{session.title}</h1>
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-subtle">
           <span className="font-mono text-fg-muted">{session.provider}</span>
@@ -124,6 +126,25 @@ export function ConversationView({
             </span>
           )}
           {session.sizeBytes != null && <span>· {formatBytes(session.sizeBytes)}</span>}
+        </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={() => download(`${safeName(session.title)}.md`, sessionToMarkdown(session), 'text/markdown')}
+            title="이 세션을 Markdown으로 내보내기"
+            className="rounded border border-border px-2 py-1 text-2xs text-fg-subtle transition-colors hover:border-brand/40 hover:text-brand"
+          >
+            ⬇ MD
+          </button>
+          <button
+            type="button"
+            onClick={() => download(`${safeName(session.title)}.json`, sessionToJson(session), 'application/json')}
+            title="이 세션을 JSON으로 내보내기"
+            className="rounded border border-border px-2 py-1 text-2xs text-fg-subtle transition-colors hover:border-brand/40 hover:text-brand"
+          >
+            ⬇ JSON
+          </button>
         </div>
       </header>
       {session.truncated && (
