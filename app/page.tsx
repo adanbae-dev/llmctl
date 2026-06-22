@@ -5,6 +5,7 @@ import { ProviderTabs, type TabStatus } from '@/components/ProviderTabs'
 import { SessionSidebar } from '@/components/SessionSidebar'
 import { ConversationView } from '@/components/ConversationView'
 import { UsageDashboard } from '@/components/UsageDashboard'
+import { SearchResults } from '@/components/SearchResults'
 import type { Provider, ProviderStatus, Session, SessionSummary } from '@/lib/adapters/types'
 
 export default function Home() {
@@ -15,8 +16,11 @@ export default function Home() {
   const [selected, setSelected] = useState<SessionSummary | null>(null)
   const [session, setSession] = useState<Session | null>(null)
   const [loadingSession, setLoadingSession] = useState(false)
-  const [view, setView] = useState<'sessions' | 'usage'>('sessions')
+  const [view, setView] = useState<'sessions' | 'usage' | 'search'>('sessions')
   const [trashPreview, setTrashPreview] = useState(false)
+  // Cross-session search: input value vs the committed query that drives results.
+  const [searchInput, setSearchInput] = useState('')
+  const [searchQ, setSearchQ] = useState('')
   // Message anchor to scroll to in the conversation (set when jumping from the
   // Security tab). nonce bumps every navigation so re-clicking re-scrolls.
   const [scrollTo, setScrollTo] = useState<{ id: string; n: number } | null>(null)
@@ -120,20 +124,25 @@ export default function Home() {
     }
   }
 
-  // Jump from the Security tab to a session's matched message: switch to the
-  // 💬 세션 view, open the session, then scroll to the match anchor.
-  function openSessionFromUsage(id: string, anchor?: string) {
+  // Open a session in the 💬 세션 view and (optionally) scroll to a message —
+  // shared by the Security-tab jump and cross-session search.
+  function openSession(provider: Provider, id: string, anchor?: string) {
     setView('sessions')
-    setActive('claude') // secret/PII scan is Claude-only
+    setActive(provider)
     setTrashPreview(false)
     const found = sessions.find((x) => x.id === id)
-    // Same discovery (live-first dedup) feeds both the scan and this list, so a
-    // hit is normally present; fall back to opening by id for any rare race.
-    onSelect(found ?? { id, provider: 'claude', title: '', projectPath: '', filePath: '' })
+    // The session list normally already holds the hit; fall back to opening by
+    // id for any rare race or archive-only entry.
+    onSelect(found ?? { id, provider, title: '', projectPath: '', filePath: '' })
     if (anchor) {
       navNonce.current += 1
       setScrollTo({ id: anchor, n: navNonce.current })
     }
+  }
+
+  // Security scan is Claude-only, so its jump pins the provider.
+  function openSessionFromUsage(id: string, anchor?: string) {
+    openSession('claude', id, anchor)
   }
 
   const tabBtn = (v: 'sessions' | 'usage') =>
@@ -152,11 +161,35 @@ export default function Home() {
         <button type="button" onClick={() => setView('usage')} className={tabBtn('usage')}>
           📊 사용량
         </button>
+        <form
+          className="ml-auto flex items-center"
+          onSubmit={(e) => {
+            e.preventDefault()
+            const q = searchInput.trim()
+            setSearchQ(q)
+            if (q) setView('search')
+          }}
+        >
+          <input
+            type="search"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="🔍 모든 세션 검색…"
+            aria-label="모든 세션 검색"
+            className={`w-44 rounded border bg-surface px-2 py-1 text-xs text-fg-strong placeholder:text-fg-faint focus:outline-none sm:w-56 ${
+              view === 'search' ? 'border-brand/50' : 'border-border focus:border-brand/50'
+            }`}
+          />
+        </form>
       </div>
 
       {view === 'usage' ? (
         <div className="flex-1 overflow-y-auto">
           <UsageDashboard onOpenSession={openSessionFromUsage} />
+        </div>
+      ) : view === 'search' ? (
+        <div className="flex-1 overflow-y-auto">
+          <SearchResults query={searchQ} onOpen={openSession} />
         </div>
       ) : (
         <>
