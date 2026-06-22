@@ -61,6 +61,15 @@ export interface SessionStat {
   sizeBytes: number
 }
 
+/** Anchor for one suspected match: which type, and the message it lives in.
+ *  messageId is the JSONL line's uuid, which equals the rendered message id
+ *  (claude adapter: `id = String(d.uuid ?? …)`), so the conversation view can
+ *  scroll to it. Recorded once per type (first uuid-bearing occurrence). */
+export interface SecretMatch {
+  type: string // SECRET_LABELS value, e.g. "OpenAI key"
+  messageId: string // message uuid → ConversationView anchor (`msg-<id>`)
+}
+
 /** One suspected session for the secret/PII drill-down: per-type match
  *  counts within a single session, so the Security tab can list the
  *  sessions behind a selected match type. */
@@ -70,6 +79,7 @@ export interface SecretHit {
   date: string
   types: CountRow[] // per-type suspected-match counts in this session
   total: number // total suspected matches in this session
+  matches: SecretMatch[] // per-type first locatable match (for scroll-to-message)
 }
 
 export interface ScanResult {
@@ -415,16 +425,37 @@ async function scanClaude(): Promise<ScanResult> {
         const s2 = t2.startsWith('mcp__') ? t2.split('__').slice(2).join('__') || t2 : t2
         countInc(toolSeq, `${s1} → ${s2}`)
       }
+      // Secret/PII scan: run the combined regex per JSONL line (not over the
+      // whole buffer) so each match can be tied back to its message uuid — the
+      // ConversationView anchor used for scroll-to-match. Still one combined
+      // regex; a line is JSON-parsed only when it actually matches (rare), so
+      // this stays a single fast linear pass over the text.
       const fileSecrets = new Map<string, number>()
-      for (const m of buf.matchAll(SECRET_RE)) {
-        const g = m.groups
-        if (!g) continue
-        for (const key in g) {
-          if (g[key] !== undefined) {
-            const label = SECRET_LABELS[key]
-            secrets.set(label, (secrets.get(label) ?? 0) + 1)
-            fileSecrets.set(label, (fileSecrets.get(label) ?? 0) + 1)
-            break
+      const firstMatch = new Map<string, string>() // type label → first uuid-bearing message
+      for (const line of buf.split('\n')) {
+        let lineUuid: string | null | undefined // lazy: undefined=unparsed, null=no uuid
+        for (const m of line.matchAll(SECRET_RE)) {
+          const g = m.groups
+          if (!g) continue
+          for (const key in g) {
+            if (g[key] !== undefined) {
+              const label = SECRET_LABELS[key]
+              secrets.set(label, (secrets.get(label) ?? 0) + 1)
+              fileSecrets.set(label, (fileSecrets.get(label) ?? 0) + 1)
+              if (!firstMatch.has(label)) {
+                if (lineUuid === undefined) {
+                  // Only anchor on lines that render as a message (user/assistant
+                  // with a body). attachment/summary/meta lines carry a uuid but
+                  // aren't shown, so their uuid can't be scrolled to — skip them
+                  // and keep looking for a rendered occurrence of this type.
+                  const o = safeParse(line)
+                  const renders = !!o && (o.type === 'user' || o.type === 'assistant') && !!o.message
+                  lineUuid = renders && typeof o!.uuid === 'string' ? (o!.uuid as string) : null
+                }
+                if (lineUuid) firstMatch.set(label, lineUuid)
+              }
+              break
+            }
           }
         }
       }
@@ -434,7 +465,8 @@ async function scanClaude(): Promise<ScanResult> {
           .map(([key, count]) => ({ key, count }))
           .sort((a, b) => b.count - a.count)
         const total = types.reduce((s, t) => s + t.count, 0)
-        secretHits.push({ id: encodeId(fp), project: fileCwd, date: fileDate, types, total })
+        const matches = [...firstMatch.entries()].map(([type, messageId]) => ({ type, messageId }))
+        secretHits.push({ id: encodeId(fp), project: fileCwd, date: fileDate, types, total, matches })
       }
       if (fileDate) {
         sessionStats.push({

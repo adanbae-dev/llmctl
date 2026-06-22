@@ -49,7 +49,12 @@ const EMPTY_INSIGHTS: Insights = {
   secretHits: [],
 }
 
-export function UsageDashboard() {
+export function UsageDashboard({
+  onOpenSession,
+}: {
+  // Jump to a session's matched message in the 💬 세션 view (from Security tab).
+  onOpenSession?: (id: string, anchor?: string) => void
+} = {}) {
   const [provider, setProvider] = useState<Provider>('claude')
   const [tab, setTab] = useState<Tab>('overview')
   const [rows, setRows] = useState<UsageRow[]>([])
@@ -467,6 +472,7 @@ export function UsageDashboard() {
               secrets={insights.secrets}
               secretSessions={insights.secretSessions}
               secretHits={insights.secretHits}
+              onOpenSession={onOpenSession}
             />
           )}
         </>

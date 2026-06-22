@@ -1,3 +1,6 @@
+'use client'
+
+import { useEffect, useRef, useState } from 'react'
 import type { Session } from '@/lib/adapters/types'
 import { MessageBubble } from './MessageBubble'
 import { formatBytes } from '@/lib/format'
@@ -23,11 +26,46 @@ export function ConversationView({
   session,
   loading,
   hasSelection,
+  scrollToId,
+  scrollToNonce,
 }: {
   session: Session | null
   loading: boolean
   hasSelection: boolean
+  // Message id (uuid) to scroll to — e.g. a secret/PII match from the Security tab.
+  scrollToId?: string | null
+  // Bumped on every navigation so re-clicking the same match re-scrolls.
+  scrollToNonce?: number
 }) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [flashId, setFlashId] = useState<string | null>(null)
+  const [missed, setMissed] = useState(false)
+
+  // After the target session renders, scroll its matched message into view and
+  // briefly highlight it. If the anchor isn't on screen (large truncated session
+  // or a non-rendered line), flag it instead of silently doing nothing.
+  useEffect(() => {
+    setMissed(false)
+    if (!scrollToId) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const raf = requestAnimationFrame(() => {
+      const root = scrollRef.current
+      if (!root) return // conversation not mounted yet (still loading) — wait for next run
+      const el = root.querySelector<HTMLElement>(`[data-msg-id=${CSS.escape(scrollToId)}]`)
+      if (!el) {
+        setMissed(true)
+        return
+      }
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      setFlashId(scrollToId)
+      timer = setTimeout(() => setFlashId(null), 2200)
+    })
+    return () => {
+      cancelAnimationFrame(raf)
+      if (timer) clearTimeout(timer)
+    }
+  }, [scrollToId, scrollToNonce, session])
+
   if (!hasSelection)
     return (
       <EmptyState
@@ -93,10 +131,21 @@ export function ConversationView({
           ⚠ 대용량 세션 — 시작 일부와 최근 메시지만 표시합니다 (중간 생략).
         </div>
       )}
-      <div className="flex-1 space-y-3 overflow-y-auto px-6 py-4">
+      {missed && (
+        <div className="border-b border-amber-500/30 bg-amber-500/10 px-6 py-2 text-xs text-amber-300">
+          ⚠ 매치된 메시지를 현재 보기에서 찾지 못했습니다 (대용량 세션은 시작·최근 일부만 표시).
+        </div>
+      )}
+      <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto px-6 py-4">
         {rows.length === 0 && <EmptyState title="표시할 메시지가 없습니다." />}
         {rows.map(({ m, switchedTo }, i) => (
-          <div key={`${m.id}-${i}`}>
+          <div
+            key={`${m.id}-${i}`}
+            data-msg-id={m.id}
+            className={`scroll-mt-4 rounded-lg transition-shadow ${
+              flashId === m.id ? 'ring-2 ring-brand/70 ring-offset-2 ring-offset-bg' : ''
+            }`}
+          >
             {switchedTo && (
               <div className="my-2 flex items-center gap-2 text-2xs text-amber-400/80">
                 <span className="h-px flex-1 bg-amber-500/20" />

@@ -46,6 +46,13 @@ export interface SessionStat {
   sizeBytes: number
 }
 
+/** One suspected match's location: type + the message uuid it lives in
+ *  (ConversationView anchor). Mirror of lib/usage SecretMatch. */
+export interface SecretMatch {
+  type: string
+  messageId: string
+}
+
 /** One suspected session in the secret/PII drill-down, with per-type counts. */
 export interface SecretHit {
   id: string
@@ -53,6 +60,7 @@ export interface SecretHit {
   date: string
   types: CountRow[]
   total: number
+  matches: SecretMatch[]
 }
 
 export interface Insights {

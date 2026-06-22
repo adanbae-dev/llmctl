@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ProviderTabs, type TabStatus } from '@/components/ProviderTabs'
 import { SessionSidebar } from '@/components/SessionSidebar'
 import { ConversationView } from '@/components/ConversationView'
@@ -17,6 +17,10 @@ export default function Home() {
   const [loadingSession, setLoadingSession] = useState(false)
   const [view, setView] = useState<'sessions' | 'usage'>('sessions')
   const [trashPreview, setTrashPreview] = useState(false)
+  // Message anchor to scroll to in the conversation (set when jumping from the
+  // Security tab). nonce bumps every navigation so re-clicking re-scrolls.
+  const [scrollTo, setScrollTo] = useState<{ id: string; n: number } | null>(null)
+  const navNonce = useRef(0)
 
   useEffect(() => {
     fetch('/api/providers')
@@ -59,11 +63,13 @@ export default function Home() {
     setSelected(null)
     setSession(null)
     setTrashPreview(false)
+    setScrollTo(null)
   }
 
   async function onSelect(s: SessionSummary) {
     setSelected(s)
     setTrashPreview(false)
+    setScrollTo(null)
     setSession(null)
     setLoadingSession(true)
     try {
@@ -114,6 +120,22 @@ export default function Home() {
     }
   }
 
+  // Jump from the Security tab to a session's matched message: switch to the
+  // 💬 세션 view, open the session, then scroll to the match anchor.
+  function openSessionFromUsage(id: string, anchor?: string) {
+    setView('sessions')
+    setActive('claude') // secret/PII scan is Claude-only
+    setTrashPreview(false)
+    const found = sessions.find((x) => x.id === id)
+    // Same discovery (live-first dedup) feeds both the scan and this list, so a
+    // hit is normally present; fall back to opening by id for any rare race.
+    onSelect(found ?? { id, provider: 'claude', title: '', projectPath: '', filePath: '' })
+    if (anchor) {
+      navNonce.current += 1
+      setScrollTo({ id: anchor, n: navNonce.current })
+    }
+  }
+
   const tabBtn = (v: 'sessions' | 'usage') =>
     `rounded px-3 py-1 text-xs font-medium ${
       view === v ? 'bg-surface-2 text-fg-strong' : 'text-fg-subtle hover:text-fg-muted'
@@ -134,7 +156,7 @@ export default function Home() {
 
       {view === 'usage' ? (
         <div className="flex-1 overflow-y-auto">
-          <UsageDashboard />
+          <UsageDashboard onOpenSession={openSessionFromUsage} />
         </div>
       ) : (
         <>
@@ -160,6 +182,8 @@ export default function Home() {
                   session={session}
                   loading={loadingSession}
                   hasSelection={!!selected || trashPreview}
+                  scrollToId={scrollTo?.id ?? null}
+                  scrollToNonce={scrollTo?.n}
                 />
               </div>
             </div>
