@@ -1,10 +1,10 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { DateRangePicker } from './DateRangePicker'
 import { Pill, EmptyState, Skeleton } from '@/components/ui'
 import { estimateCostUSD, isApprox, ratesFor } from '@/lib/pricing'
-import { fmt, fmtBytes, DOW, type UsageRow, type ToolRow, type Insights } from './usage/shared'
+import { fmt, fmtBytes, shortPath, DOW, type UsageRow, type ToolRow, type Insights } from './usage/shared'
 import { UsageOverview } from './usage/UsageOverview'
 import { CostSection } from './usage/CostSection'
 import { ToolsSection } from './usage/ToolsSection'
@@ -52,6 +52,12 @@ const EMPTY_INSIGHTS: Insights = {
   secretHits: [],
 }
 
+// Fallback date bounds for providers that don't return server dateBounds.
+function boundsFromRows(rows: UsageRow[]): { min: string; max: string } {
+  const dates = rows.map((r) => r.date).sort()
+  return { min: dates[0] ?? '', max: dates[dates.length - 1] ?? '' }
+}
+
 export function UsageDashboard({
   onOpenSession,
 }: {
@@ -69,6 +75,12 @@ export function UsageDashboard({
   const [sel, setSel] = useState<Set<string>>(new Set())
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
+  const [project, setProject] = useState('')
+  // Full unscoped range + project list from the server (so the filters never
+  // collapse to the currently-scoped subset).
+  const [bounds, setBounds] = useState({ min: '', max: '' })
+  const [projectList, setProjectList] = useState<string[]>([])
+  const inited = useRef('') // provider we've already defaulted from/to for
   const [series, setSeries] = useState({ output: true, input: true, cacheRead: false })
   const [loading, setLoading] = useState(true)
   const [backupBusy, setBackupBusy] = useState(false)
@@ -92,54 +104,74 @@ export function UsageDashboard({
     }
   }
 
+  // One effect drives both the initial load and every scoped re-fetch. The
+  // server scopes all sections by from/to/project; dateBounds & projectList come
+  // back UNSCOPED so the filters stay stable. `inited` seeds from/to once per
+  // provider (avoids a feedback loop); the debounce coalesces picker drags.
   useEffect(() => {
     setLoading(true)
-    fetch(`/api/usage?provider=${provider}`)
-      .then((r) => r.json())
-      .then((d) => {
-        const rs: UsageRow[] = d.rows ?? []
-        const ms: string[] = d.models ?? []
-        setRows(rs)
-        setTools(d.tools ?? [])
-        setInsights({
-          byProject: d.byProject ?? [],
-          byBranch: d.byBranch ?? [],
-          stopReasons: d.stopReasons ?? [],
-          skills: d.skills ?? [],
-          subagents: d.subagents ?? [],
-          hotFiles: d.hotFiles ?? [],
-          toolSeq: d.toolSeq ?? [],
-          toolErrors: d.toolErrors ?? [],
-          activity: d.activity ?? [],
-          activityByDate: d.activityByDate ?? [],
-          sessions: d.sessions ?? [],
-          cacheTtl: d.cacheTtl ?? { ttl5m: 0, ttl1h: 0 },
-          secrets: d.secrets ?? [],
-          secretSeverity: d.secretSeverity ?? { exposed: 0, mention: 0 },
-          secretSessions: d.secretSessions ?? 0,
-          exposedSessions: d.exposedSessions ?? 0,
-          mentionSessions: d.mentionSessions ?? 0,
-          secretHits: d.secretHits ?? [],
+    const timer = setTimeout(() => {
+      const params = new URLSearchParams({ provider })
+      if (from) params.set('from', from)
+      if (to) params.set('to', to)
+      if (project) params.set('project', project)
+      fetch(`/api/usage?${params.toString()}`)
+        .then((r) => r.json())
+        .then((d) => {
+          const rs: UsageRow[] = d.rows ?? []
+          const ms: string[] = d.models ?? []
+          setRows(rs)
+          setTools(d.tools ?? [])
+          setInsights({
+            byProject: d.byProject ?? [],
+            byBranch: d.byBranch ?? [],
+            stopReasons: d.stopReasons ?? [],
+            skills: d.skills ?? [],
+            subagents: d.subagents ?? [],
+            hotFiles: d.hotFiles ?? [],
+            toolSeq: d.toolSeq ?? [],
+            toolErrors: d.toolErrors ?? [],
+            activity: d.activity ?? [],
+            activityByDate: d.activityByDate ?? [],
+            sessions: d.sessions ?? [],
+            cacheTtl: d.cacheTtl ?? { ttl5m: 0, ttl1h: 0 },
+            secrets: d.secrets ?? [],
+            secretSeverity: d.secretSeverity ?? { exposed: 0, mention: 0 },
+            secretSessions: d.secretSessions ?? 0,
+            exposedSessions: d.exposedSessions ?? 0,
+            mentionSessions: d.mentionSessions ?? 0,
+            secretHits: d.secretHits ?? [],
+          })
+          setModels(ms)
+          setProjectList(d.projectList ?? [])
+          const b = d.dateBounds && d.dateBounds.min ? d.dateBounds : boundsFromRows(rs)
+          setBounds(b)
+          if (inited.current !== provider) {
+            inited.current = provider
+            setSel(new Set(ms))
+            setProject('')
+            if (b.min) {
+              setFrom(b.min)
+              setTo(b.max)
+            }
+          } else {
+            // Scoped re-fetch: preserve the user's model selection.
+            setSel((prev) => {
+              const keep = new Set([...prev].filter((m) => ms.includes(m)))
+              return keep.size ? keep : new Set(ms)
+            })
+          }
         })
-        setModels(ms)
-        setSel(new Set(ms))
-        const dates = rs.map((r) => r.date).sort()
-        setFrom(dates[0] ?? '')
-        setTo(dates[dates.length - 1] ?? '')
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false))
-  }, [provider])
+        .catch(() => {})
+        .finally(() => setLoading(false))
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [provider, from, to, project])
 
   const filtered = useMemo(
     () => rows.filter((r) => sel.has(r.model) && (!from || r.date >= from) && (!to || r.date <= to)),
     [rows, sel, from, to],
   )
-
-  const bounds = useMemo(() => {
-    const dates = rows.map((r) => r.date).sort()
-    return { min: dates[0] ?? '', max: dates[dates.length - 1] ?? '' }
-  }, [rows])
 
   const totals = useMemo(
     () =>
@@ -392,6 +424,24 @@ export function UsageDashboard({
                 }}
               />
             </div>
+            {projectList.length > 0 && (
+              <div className="flex items-center gap-2">
+                프로젝트
+                <select
+                  value={project}
+                  onChange={(e) => setProject(e.target.value)}
+                  title={project || '전체 프로젝트'}
+                  className="max-w-[220px] rounded border border-border bg-surface px-2 py-1 text-xs text-fg-strong focus:border-brand/50 focus:outline-none"
+                >
+                  <option value="">전체 프로젝트</option>
+                  {projectList.map((p) => (
+                    <option key={p} value={p}>
+                      {shortPath(p)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               모델:
               {models.map((m) => (

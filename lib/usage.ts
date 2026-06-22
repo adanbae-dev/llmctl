@@ -97,6 +97,13 @@ export interface SecretHit {
   matches: SecretMatch[] // per (type×severity) first locatable match (scroll-to-message)
 }
 
+/** Dashboard scope filter (Claude). Empty fields = no constraint. */
+export interface Scope {
+  from?: string // inclusive YYYY-MM-DD
+  to?: string // inclusive YYYY-MM-DD
+  project?: string // exact cwd match
+}
+
 export interface ScanResult {
   rows: UsageRow[]
   tools: ToolRow[]
@@ -120,6 +127,8 @@ export interface ScanResult {
   exposedSessions?: number // sessions with >=1 exposed (high-severity) match
   mentionSessions?: number // sessions with >=1 mention (low-severity) match
   secretHits?: SecretHit[] // per-session suspected-match breakdown (Claude), top-N by exposed then total
+  dateBounds?: { min: string; max: string } // full UNSCOPED date range, for the filter UI
+  projectList?: string[] // all distinct projects (cwd), UNSCOPED, for the project filter
 }
 
 function safeParse(l: string): Record<string, unknown> | null {
@@ -371,7 +380,7 @@ async function listClaudeFiles(root: string): Promise<string[]> {
 
 // ── Claude: assistant lines carry usage/model/timestamp/tool_use + cwd, gitBranch,
 // stop_reason, isSidechain; user lines may carry slash-command tags. ──
-async function scanClaude(): Promise<ScanResult> {
+async function scanClaude(scope: Scope = {}): Promise<ScanResult> {
   const agg = new Map<string, UsageRow>()
   const tools = new Map<string, ToolRow>()
   const projects = new Map<string, GroupRow>()
@@ -392,6 +401,15 @@ async function scanClaude(): Promise<ScanResult> {
   const activity = newActivity()
   const activityDate = new Map<string, number>()
   const sessionStats: SessionStat[] = []
+  // Full (unscoped) range + project list for the filter UI — tracked before the
+  // scope gate so the picker can always widen back out.
+  let dateMin = ''
+  let dateMax = ''
+  const projectCount = new Map<string, number>() // cwd → assistant-line count, for ranking the filter list
+  const inScope = (date: string, cwd: string) =>
+    (!scope.from || date >= scope.from) &&
+    (!scope.to || date <= scope.to) &&
+    (!scope.project || cwd === scope.project)
 
   const roots = [CLAUDE_PROJECTS, ARCHIVE_ROOTS.claude].filter(Boolean) as string[]
   const files = await dedupedFiles(roots, listClaudeFiles)
@@ -413,8 +431,10 @@ async function scanClaude(): Promise<ScanResult> {
         if (!isAssistant && !hasCmd && !hasToolResult) continue
         const d = safeParse(line)
         if (!d) continue
-        if (hasCmd && d.type === 'user') extractSkills(line, skills)
         if (d.type === 'user') {
+          const ud = toLocalDate(d.timestamp) ?? ''
+          if (!inScope(ud, d.cwd ? String(d.cwd) : '')) continue
+          if (hasCmd) extractSkills(line, skills)
           const um = d.message as Record<string, unknown> | undefined
           const uc = um?.content
           if (Array.isArray(uc)) {
@@ -436,6 +456,15 @@ async function scanClaude(): Promise<ScanResult> {
         if (!m) continue
         const date = toLocalDate(d.timestamp)
         if (!date) continue
+        const cwd = d.cwd ? String(d.cwd) : ''
+        // Full range + project list (unscoped) and session identity (first line),
+        // recorded before the scope gate so they survive any active filter.
+        if (!dateMin || date < dateMin) dateMin = date
+        if (!dateMax || date > dateMax) dateMax = date
+        if (cwd) projectCount.set(cwd, (projectCount.get(cwd) ?? 0) + 1)
+        if (!fileCwd && cwd) fileCwd = cwd
+        if (!fileDate) fileDate = date
+        if (!inScope(date, cwd)) continue
         const hd = localHourDow(d.timestamp)
         if (hd) {
           activity[hd.dow][hd.hour] += 1
@@ -480,8 +509,6 @@ async function scanClaude(): Promise<ScanResult> {
           row.messages += 1
           const cost = estimateCostUSD(model, delta)
           fileCost += cost
-          if (!fileCwd && d.cwd) fileCwd = String(d.cwd)
-          if (!fileDate) fileDate = date
           if (d.cwd) groupAdd(projects, String(d.cwd), delta, cost)
           if (d.gitBranch) groupAdd(branches, String(d.gitBranch), delta, cost)
           const sr = m.stop_reason
@@ -504,7 +531,10 @@ async function scanClaude(): Promise<ScanResult> {
       // this stays a single fast linear pass over the text.
       const fileSev = new Map<string, { exposed: number; mention: number }>()
       const firstMatch = new Map<string, string>() // `${label}|${severity}` → first uuid-bearing message
-      for (const line of buf.split('\n')) {
+      // Per-file insights below are scoped by the session's representative
+      // date/project (fileDate/fileCwd captured at the first line above).
+      const fileInScope = inScope(fileDate, fileCwd)
+      if (fileInScope) for (const line of buf.split('\n')) {
         let lineUuid: string | null | undefined // lazy: undefined=unparsed, null=no uuid
         for (const m of line.matchAll(SECRET_RE)) {
           const g = m.groups
@@ -555,7 +585,7 @@ async function scanClaude(): Promise<ScanResult> {
           matches,
         })
       }
-      if (fileDate) {
+      if (fileDate && fileInScope) {
         sessionStats.push({
           id: encodeId(fp),
           project: fileCwd,
@@ -590,6 +620,9 @@ async function scanClaude(): Promise<ScanResult> {
     exposedSessions,
     mentionSessions,
     secretHits: secretHits.sort((a, b) => b.exposedTotal - a.exposedTotal || b.total - a.total).slice(0, 100),
+    dateBounds: { min: dateMin, max: dateMax },
+    // Most-active projects first, capped — keeps the filter dropdown usable.
+    projectList: [...projectCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 50).map(([k]) => k),
     activity,
     activityByDate: activityDateOut(activityDate),
     sessions: topSessions(sessionStats),
@@ -788,11 +821,11 @@ async function scanCodex(): Promise<ScanResult> {
 }
 
 /** Aggregate token usage + tool usage + insights by date for one provider. */
-export async function scanUsage(provider: string): Promise<ScanResult> {
+export async function scanUsage(provider: string, scope: Scope = {}): Promise<ScanResult> {
   let res: ScanResult
   if (provider === 'cursor') res = await scanCursor()
   else if (provider === 'codex') res = await scanCodex()
-  else res = await scanClaude()
+  else res = await scanClaude(scope)
   res.rows.sort((a, b) => a.date.localeCompare(b.date) || a.model.localeCompare(b.model))
   res.tools.sort((a, b) => b.count - a.count)
   return res
