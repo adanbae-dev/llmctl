@@ -61,25 +61,40 @@ export interface SessionStat {
   sizeBytes: number
 }
 
-/** Anchor for one suspected match: which type, and the message it lives in.
+/** Severity grade for one suspected match. 'exposed' = looks like a real,
+ *  complete credential; 'mention' = placeholder / example / masked / low-entropy
+ *  (pattern matched but probably not a live secret). See severityOf(). */
+export type Severity = 'exposed' | 'mention'
+
+/** Per-type match counts split by severity (within one session, or whole-dataset). */
+export interface SecretTypeStat {
+  key: string // SECRET_LABELS value, e.g. "AI API 키 (sk-…)"
+  exposed: number
+  mention: number
+}
+
+/** Anchor for one suspected match: type + severity + the message it lives in.
  *  messageId is the JSONL line's uuid, which equals the rendered message id
  *  (claude adapter: `id = String(d.uuid ?? …)`), so the conversation view can
- *  scroll to it. Recorded once per type (first uuid-bearing occurrence). */
+ *  scroll to it. Recorded once per (type×severity) first uuid-bearing occurrence. */
 export interface SecretMatch {
-  type: string // SECRET_LABELS value, e.g. "OpenAI key"
+  type: string // SECRET_LABELS value
+  severity: Severity
   messageId: string // message uuid → ConversationView anchor (`msg-<id>`)
 }
 
 /** One suspected session for the secret/PII drill-down: per-type match
- *  counts within a single session, so the Security tab can list the
- *  sessions behind a selected match type. */
+ *  counts (split by severity) within a single session, so the Security tab
+ *  can list the sessions behind a selected match type and severity. */
 export interface SecretHit {
   id: string // base64url file locator (matches the session viewer's id)
   project: string
   date: string
-  types: CountRow[] // per-type suspected-match counts in this session
-  total: number // total suspected matches in this session
-  matches: SecretMatch[] // per-type first locatable match (for scroll-to-message)
+  types: SecretTypeStat[] // per-type exposed/mention counts in this session
+  total: number // exposed + mention across all types
+  exposedTotal: number
+  mentionTotal: number
+  matches: SecretMatch[] // per (type×severity) first locatable match (scroll-to-message)
 }
 
 export interface ScanResult {
@@ -99,9 +114,12 @@ export interface ScanResult {
   activityByDate?: { date: string; count: number }[] // per calendar day, chronological
   sessions?: SessionStat[] // union of top-N by cost and top-N by size
   cacheTtl?: { ttl5m: number; ttl1h: number } // cache-creation tokens by TTL (Claude), whole-dataset
-  secrets?: CountRow[] // pattern-based secret/PII match counts (Claude), whole-dataset
-  secretSessions?: number // sessions with >=1 suspected match
-  secretHits?: SecretHit[] // per-session suspected-match breakdown (Claude), top-N by total
+  secrets?: SecretTypeStat[] // per-type exposed/mention split (Claude), whole-dataset
+  secretSeverity?: { exposed: number; mention: number } // whole-dataset severity totals
+  secretSessions?: number // sessions with >=1 suspected match (any severity)
+  exposedSessions?: number // sessions with >=1 exposed (high-severity) match
+  mentionSessions?: number // sessions with >=1 mention (low-severity) match
+  secretHits?: SecretHit[] // per-session suspected-match breakdown (Claude), top-N by exposed then total
 }
 
 function safeParse(l: string): Record<string, unknown> | null {
@@ -171,6 +189,58 @@ const SECRET_LABELS: Record<string, string> = {
   slack: 'Slack 토큰',
   pk: '개인키 블록',
   jwt: 'JWT 토큰',
+}
+
+// --- Secret severity grading -------------------------------------------------
+// The regex only matches high-signal patterns, so a hit is never a bare word
+// mention; the question is whether the matched TOKEN is a real, complete
+// credential ("exposed") or a placeholder / example / masked / low-entropy
+// string ("mention"). Heuristic, regex-only → results stay framed as 추정.
+// Biased toward "exposed" when uncertain; a private-key block is never downgraded.
+const SECRET_PREFIX: Record<string, RegExp> = {
+  ai: /^sk-(?:ant-)?/,
+  gh: /^(?:gh[oprsu]_|github_pat_)/,
+  aws: /^AKIA/,
+  gcp: /^AIza/,
+  slack: /^xox[baprs]-/,
+}
+// Strong markers of a placeholder / example / masked value (case-insensitive).
+const PLACEHOLDER_RE = /example|sample|your[_-]?|placeholder|redacted|dummy|fake|x{4,}|0{4,}|1234|abcd|a{4,}|<|>|\.\.\.|…|\*/i
+
+// Shannon entropy (bits/char) of a string — low for repeated/sequential fillers,
+// ~4–6 for real high-entropy credentials.
+function shannon(s: string): number {
+  if (!s) return 0
+  const freq = new Map<string, number>()
+  for (const ch of s) freq.set(ch, (freq.get(ch) ?? 0) + 1)
+  let h = 0
+  for (const c of freq.values()) {
+    const p = c / s.length
+    h -= p * Math.log2(p)
+  }
+  return h
+}
+
+function severityOf(key: string, token: string): Severity {
+  if (key === 'pk') return 'exposed' // a BEGIN PRIVATE KEY line is structural, never an example
+  if (PLACEHOLDER_RE.test(token)) return 'mention'
+  const rand = token.replace(SECRET_PREFIX[key] ?? '', '') // entropy of the random part, not the fixed prefix
+  return shannon(rand) < 3 ? 'mention' : 'exposed'
+}
+
+function bumpSev(map: Map<string, { exposed: number; mention: number }>, label: string, sev: Severity): void {
+  let e = map.get(label)
+  if (!e) {
+    e = { exposed: 0, mention: 0 }
+    map.set(label, e)
+  }
+  e[sev] += 1
+}
+
+function secretTypesOut(map: Map<string, { exposed: number; mention: number }>): SecretTypeStat[] {
+  return [...map.entries()]
+    .map(([key, v]) => ({ key, exposed: v.exposed, mention: v.mention }))
+    .sort((a, b) => b.exposed + b.mention - (a.exposed + a.mention))
 }
 
 function bucket(agg: Map<string, UsageRow>, date: string, model: string): UsageRow {
@@ -314,8 +384,10 @@ async function scanClaude(): Promise<ScanResult> {
   const toolErr = new Map<string, { total: number; errors: number }>()
   let ttl5m = 0
   let ttl1h = 0
-  const secrets = new Map<string, number>()
+  const secretSev = new Map<string, { exposed: number; mention: number }>()
   let secretSessions = 0
+  let exposedSessions = 0
+  let mentionSessions = 0
   const secretHits: SecretHit[] = []
   const activity = newActivity()
   const activityDate = new Map<string, number>()
@@ -430,8 +502,8 @@ async function scanClaude(): Promise<ScanResult> {
       // ConversationView anchor used for scroll-to-match. Still one combined
       // regex; a line is JSON-parsed only when it actually matches (rare), so
       // this stays a single fast linear pass over the text.
-      const fileSecrets = new Map<string, number>()
-      const firstMatch = new Map<string, string>() // type label → first uuid-bearing message
+      const fileSev = new Map<string, { exposed: number; mention: number }>()
+      const firstMatch = new Map<string, string>() // `${label}|${severity}` → first uuid-bearing message
       for (const line of buf.split('\n')) {
         let lineUuid: string | null | undefined // lazy: undefined=unparsed, null=no uuid
         for (const m of line.matchAll(SECRET_RE)) {
@@ -440,33 +512,48 @@ async function scanClaude(): Promise<ScanResult> {
           for (const key in g) {
             if (g[key] !== undefined) {
               const label = SECRET_LABELS[key]
-              secrets.set(label, (secrets.get(label) ?? 0) + 1)
-              fileSecrets.set(label, (fileSecrets.get(label) ?? 0) + 1)
-              if (!firstMatch.has(label)) {
+              const sev = severityOf(key, m[0])
+              bumpSev(secretSev, label, sev)
+              bumpSev(fileSev, label, sev)
+              const anchorKey = `${label}|${sev}` // anchor per type AND severity, so a jump lands on a match of the chosen grade
+              if (!firstMatch.has(anchorKey)) {
                 if (lineUuid === undefined) {
                   // Only anchor on lines that render as a message (user/assistant
                   // with a body). attachment/summary/meta lines carry a uuid but
                   // aren't shown, so their uuid can't be scrolled to — skip them
-                  // and keep looking for a rendered occurrence of this type.
+                  // and keep looking for a rendered occurrence.
                   const o = safeParse(line)
                   const renders = !!o && (o.type === 'user' || o.type === 'assistant') && !!o.message
                   lineUuid = renders && typeof o!.uuid === 'string' ? (o!.uuid as string) : null
                 }
-                if (lineUuid) firstMatch.set(label, lineUuid)
+                if (lineUuid) firstMatch.set(anchorKey, lineUuid)
               }
               break
             }
           }
         }
       }
-      if (fileSecrets.size > 0) {
+      if (fileSev.size > 0) {
         secretSessions += 1
-        const types = [...fileSecrets.entries()]
-          .map(([key, count]) => ({ key, count }))
-          .sort((a, b) => b.count - a.count)
-        const total = types.reduce((s, t) => s + t.count, 0)
-        const matches = [...firstMatch.entries()].map(([type, messageId]) => ({ type, messageId }))
-        secretHits.push({ id: encodeId(fp), project: fileCwd, date: fileDate, types, total, matches })
+        const types = secretTypesOut(fileSev)
+        const exposedTotal = types.reduce((s, t) => s + t.exposed, 0)
+        const mentionTotal = types.reduce((s, t) => s + t.mention, 0)
+        if (exposedTotal > 0) exposedSessions += 1
+        if (mentionTotal > 0) mentionSessions += 1
+        const matches = [...firstMatch.entries()].map(([k, messageId]) => {
+          const sep = k.lastIndexOf('|')
+          return { type: k.slice(0, sep), severity: k.slice(sep + 1) as Severity, messageId }
+        })
+        secretHits.push({
+          id: encodeId(fp),
+          project: fileCwd,
+          date: fileDate,
+          types,
+          total: exposedTotal + mentionTotal,
+          exposedTotal,
+          mentionTotal,
+          matches,
+        })
       }
       if (fileDate) {
         sessionStats.push({
@@ -494,9 +581,15 @@ async function scanClaude(): Promise<ScanResult> {
     toolSeq: countsOut(toolSeq),
     toolErrors: toolErrorsOut(toolErr),
     cacheTtl: { ttl5m, ttl1h },
-    secrets: countsOut(secrets),
+    secrets: secretTypesOut(secretSev),
+    secretSeverity: {
+      exposed: [...secretSev.values()].reduce((s, v) => s + v.exposed, 0),
+      mention: [...secretSev.values()].reduce((s, v) => s + v.mention, 0),
+    },
     secretSessions,
-    secretHits: secretHits.sort((a, b) => b.total - a.total).slice(0, 100),
+    exposedSessions,
+    mentionSessions,
+    secretHits: secretHits.sort((a, b) => b.exposedTotal - a.exposedTotal || b.total - a.total).slice(0, 100),
     activity,
     activityByDate: activityDateOut(activityDate),
     sessions: topSessions(sessionStats),

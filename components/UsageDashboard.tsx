@@ -45,7 +45,10 @@ const EMPTY_INSIGHTS: Insights = {
   sessions: [],
   cacheTtl: { ttl5m: 0, ttl1h: 0 },
   secrets: [],
+  secretSeverity: { exposed: 0, mention: 0 },
   secretSessions: 0,
+  exposedSessions: 0,
+  mentionSessions: 0,
   secretHits: [],
 }
 
@@ -112,7 +115,10 @@ export function UsageDashboard({
           sessions: d.sessions ?? [],
           cacheTtl: d.cacheTtl ?? { ttl5m: 0, ttl1h: 0 },
           secrets: d.secrets ?? [],
+          secretSeverity: d.secretSeverity ?? { exposed: 0, mention: 0 },
           secretSessions: d.secretSessions ?? 0,
+          exposedSessions: d.exposedSessions ?? 0,
+          mentionSessions: d.mentionSessions ?? 0,
           secretHits: d.secretHits ?? [],
         })
         setModels(ms)
@@ -470,7 +476,10 @@ export function UsageDashboard({
             <SecuritySection
               provider={provider}
               secrets={insights.secrets}
+              secretSeverity={insights.secretSeverity}
               secretSessions={insights.secretSessions}
+              exposedSessions={insights.exposedSessions}
+              mentionSessions={insights.mentionSessions}
               secretHits={insights.secretHits}
               onOpenSession={onOpenSession}
             />

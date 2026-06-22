@@ -46,20 +46,35 @@ export interface SessionStat {
   sizeBytes: number
 }
 
-/** One suspected match's location: type + the message uuid it lives in
- *  (ConversationView anchor). Mirror of lib/usage SecretMatch. */
+/** Severity grade for a suspected match. Mirror of lib/usage Severity.
+ *  'exposed' = looks like a real credential; 'mention' = placeholder/example/masked. */
+export type Severity = 'exposed' | 'mention'
+
+/** Per-type match counts split by severity. Mirror of lib/usage SecretTypeStat. */
+export interface SecretTypeStat {
+  key: string
+  exposed: number
+  mention: number
+}
+
+/** One suspected match's location: type + severity + the message uuid it lives
+ *  in (ConversationView anchor). Mirror of lib/usage SecretMatch. */
 export interface SecretMatch {
   type: string
+  severity: Severity
   messageId: string
 }
 
-/** One suspected session in the secret/PII drill-down, with per-type counts. */
+/** One suspected session in the secret/PII drill-down, per-type counts split
+ *  by severity. Mirror of lib/usage SecretHit. */
 export interface SecretHit {
   id: string
   project: string
   date: string
-  types: CountRow[]
+  types: SecretTypeStat[]
   total: number
+  exposedTotal: number
+  mentionTotal: number
   matches: SecretMatch[]
 }
 
@@ -76,8 +91,11 @@ export interface Insights {
   activity: number[][]
   activityByDate: { date: string; count: number }[]
   sessions: SessionStat[]
-  secrets: CountRow[]
+  secrets: SecretTypeStat[]
+  secretSeverity: { exposed: number; mention: number }
   secretSessions: number
+  exposedSessions: number
+  mentionSessions: number
   secretHits: SecretHit[]
 }
 
