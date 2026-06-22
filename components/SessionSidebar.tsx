@@ -32,6 +32,8 @@ export function SessionSidebar({
   onDelete,
   onRestored,
   onViewTrash,
+  favorites,
+  onToggleFavorite,
 }: {
   sessions: SessionSummary[]
   loading: boolean
@@ -40,9 +42,12 @@ export function SessionSidebar({
   onDelete: (s: SessionSummary) => void
   onRestored?: () => void
   onViewTrash?: (item: TrashItem) => void
+  favorites?: Set<string>
+  onToggleFavorite?: (id: string) => void
 }) {
   const [q, setQ] = useState('')
   const [showArchived, setShowArchived] = useState(true)
+  const [favoritesOnly, setFavoritesOnly] = useState(false)
   const [trashMode, setTrashMode] = useState(false)
   const [trash, setTrash] = useState<TrashItem[]>([])
   const [trashLoading, setTrashLoading] = useState(false)
@@ -53,10 +58,11 @@ export function SessionSidebar({
     const s = q.trim().toLowerCase()
     return sessions.filter((x) => {
       if (!showArchived && x.archived) return false
+      if (favoritesOnly && !favorites?.has(x.id)) return false
       if (!s) return true
       return x.title.toLowerCase().includes(s) || x.projectPath.toLowerCase().includes(s)
     })
-  }, [sessions, q, showArchived])
+  }, [sessions, q, showArchived, favoritesOnly, favorites])
 
   async function loadTrash() {
     setTrashLoading(true)
@@ -126,6 +132,18 @@ export function SessionSidebar({
                   className="accent-brand"
                 />
                 보관본 포함 <span className="text-fg-faint">({archivedCount})</span>
+              </label>
+            )}
+            {onToggleFavorite && (
+              <label className="mt-2 flex items-center gap-1.5 text-2xs text-fg-subtle">
+                <input
+                  type="checkbox"
+                  checked={favoritesOnly}
+                  onChange={(e) => setFavoritesOnly(e.target.checked)}
+                  className="accent-brand"
+                />
+                ⭐ 즐겨찾기만
+                {favorites && favorites.size > 0 && <span className="text-fg-faint"> ({favorites.size})</span>}
               </label>
             )}
           </>
@@ -210,7 +228,7 @@ export function SessionSidebar({
                   <button
                     type="button"
                     onClick={() => onSelect(s)}
-                    className={`block w-full px-3 py-2 pr-8 text-left hover:bg-surface ${
+                    className={`block w-full px-3 py-2 pr-14 text-left hover:bg-surface ${
                       selectedId === s.id ? 'bg-surface-2' : ''
                     }`}
                   >
@@ -236,6 +254,23 @@ export function SessionSidebar({
                   >
                     🗑
                   </button>
+                  {onToggleFavorite && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onToggleFavorite(s.id)
+                      }}
+                      title="즐겨찾기"
+                      className={`absolute right-7 top-1.5 rounded p-1 text-sm ${
+                        favorites?.has(s.id)
+                          ? 'text-amber-400'
+                          : 'hidden text-fg-subtle hover:text-amber-400 group-hover:block'
+                      }`}
+                    >
+                      {favorites?.has(s.id) ? '★' : '☆'}
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>

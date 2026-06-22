@@ -7,6 +7,7 @@ import { ConversationView } from '@/components/ConversationView'
 import { UsageDashboard } from '@/components/UsageDashboard'
 import { SearchResults } from '@/components/SearchResults'
 import type { Provider, ProviderStatus, Session, SessionSummary } from '@/lib/adapters/types'
+import type { MetaMap, SessionMeta } from '@/lib/meta'
 
 export default function Home() {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
@@ -25,6 +26,8 @@ export default function Home() {
   // Security tab). nonce bumps every navigation so re-clicking re-scrolls.
   const [scrollTo, setScrollTo] = useState<{ id: string; n: number } | null>(null)
   const navNonce = useRef(0)
+  // Per-session user metadata (favorite/tags/note), persisted via /api/meta.
+  const [meta, setMeta] = useState<MetaMap>({})
 
   useEffect(() => {
     fetch('/api/providers')
@@ -61,6 +64,33 @@ export default function Home() {
   }, [sessions])
 
   const visible = useMemo(() => sessions.filter((s) => s.provider === active), [sessions, active])
+
+  const favorites = useMemo(
+    () => new Set(Object.entries(meta).filter(([, m]) => m?.favorite).map(([id]) => id)),
+    [meta],
+  )
+
+  useEffect(() => {
+    fetch('/api/meta')
+      .then((r) => r.json())
+      .then((d) => setMeta(d.meta ?? {}))
+      .catch(() => {})
+  }, [])
+
+  // Optimistic update + reconcile with the server's normalized result.
+  function updateMeta(id: string, patch: Partial<SessionMeta>) {
+    setMeta((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }))
+    fetch('/api/meta', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id, ...patch }),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d && d.meta) setMeta((prev) => ({ ...prev, [id]: d.meta }))
+      })
+      .catch(() => {})
+  }
 
   function onTab(p: Provider) {
     setActive(p)
@@ -203,6 +233,8 @@ export default function Home() {
               onDelete={onDelete}
               onRestored={loadSessions}
               onViewTrash={onViewTrash}
+              favorites={favorites}
+              onToggleFavorite={(id) => updateMeta(id, { favorite: !meta[id]?.favorite })}
             />
             <div className="flex flex-1 flex-col overflow-hidden">
               {trashPreview && (
@@ -217,6 +249,8 @@ export default function Home() {
                   hasSelection={!!selected || trashPreview}
                   scrollToId={scrollTo?.id ?? null}
                   scrollToNonce={scrollTo?.n}
+                  meta={selected ? meta[selected.id] : undefined}
+                  onUpdateMeta={selected ? (patch) => updateMeta(selected.id, patch) : undefined}
                 />
               </div>
             </div>

@@ -6,6 +6,8 @@ import { MessageBubble } from './MessageBubble'
 import { formatBytes } from '@/lib/format'
 import { EmptyState, Skeleton } from '@/components/ui'
 import { download, sessionToMarkdown, sessionToJson, safeName } from '@/lib/exporters'
+import { MetaEditor } from './MetaEditor'
+import type { SessionMeta } from '@/lib/meta'
 
 function fmt(n?: number): string {
   return (n ?? 0).toLocaleString()
@@ -29,6 +31,8 @@ export function ConversationView({
   hasSelection,
   scrollToId,
   scrollToNonce,
+  meta,
+  onUpdateMeta,
 }: {
   session: Session | null
   loading: boolean
@@ -37,6 +41,9 @@ export function ConversationView({
   scrollToId?: string | null
   // Bumped on every navigation so re-clicking the same match re-scrolls.
   scrollToNonce?: number
+  // Per-session user metadata (favorite/tags/note) + updater. Absent for trash preview.
+  meta?: SessionMeta
+  onUpdateMeta?: (patch: Partial<SessionMeta>) => void
 }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const [flashId, setFlashId] = useState<string | null>(null)
@@ -147,6 +154,7 @@ export function ConversationView({
           </button>
         </div>
       </header>
+      {onUpdateMeta && <MetaEditor key={session.id} meta={meta} onUpdate={onUpdateMeta} />}
       {session.truncated && (
         <div className="border-b border-amber-500/30 bg-amber-500/10 px-6 py-2 text-xs text-amber-300">
           ⚠ 대용량 세션 — 시작 일부와 최근 메시지만 표시합니다 (중간 생략).
