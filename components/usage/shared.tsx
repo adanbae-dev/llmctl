@@ -97,6 +97,7 @@ export interface Insights {
   exposedSessions: number
   mentionSessions: number
   secretHits: SecretHit[]
+  monthlyCost: { month: string; cost: number }[]
 }
 
 export type Totals = { input: number; output: number; cacheRead: number; cacheCreate: number; messages: number }

@@ -14,9 +14,11 @@ import type { Dispatch, SetStateAction } from 'react'
 import { Section, Pill, Badge, InfoDot, BarList } from '@/components/ui'
 import { GLOSSARY } from '@/lib/glossary'
 import { fmt, usd, shortPath, MODEL_COLORS, type CostPoint, type PerModel, type GroupRow } from './shared'
+import { BudgetCard } from './BudgetCard'
 
 export function CostSection({
   costTrend,
+  monthlyCost,
   models,
   modelTrend,
   sel,
@@ -28,6 +30,7 @@ export function CostSection({
   setInsightMetric,
 }: {
   costTrend: CostPoint[]
+  monthlyCost: { month: string; cost: number }[]
   models: string[]
   modelTrend: Record<string, number | string>[]
   sel: Set<string>
@@ -50,6 +53,7 @@ export function CostSection({
   const ttlMax = Math.max(cacheTtl.ttl5m, cacheTtl.ttl1h, 1)
   return (
     <div className="space-y-6">
+      <BudgetCard monthlyCost={monthlyCost} />
       {costTrend.length > 1 && (
         <Section
           title={

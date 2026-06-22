@@ -50,6 +50,7 @@ const EMPTY_INSIGHTS: Insights = {
   exposedSessions: 0,
   mentionSessions: 0,
   secretHits: [],
+  monthlyCost: [],
 }
 
 // Fallback date bounds for providers that don't return server dateBounds.
@@ -141,6 +142,7 @@ export function UsageDashboard({
             exposedSessions: d.exposedSessions ?? 0,
             mentionSessions: d.mentionSessions ?? 0,
             secretHits: d.secretHits ?? [],
+            monthlyCost: d.monthlyCost ?? [],
           })
           setModels(ms)
           setProjectList(d.projectList ?? [])
@@ -483,6 +485,7 @@ export function UsageDashboard({
           {tab === 'cost' && (
             <CostSection
               costTrend={costTrend}
+              monthlyCost={insights.monthlyCost}
               models={models}
               modelTrend={modelTrend}
               sel={sel}

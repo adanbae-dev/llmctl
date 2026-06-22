@@ -129,6 +129,7 @@ export interface ScanResult {
   secretHits?: SecretHit[] // per-session suspected-match breakdown (Claude), top-N by exposed then total
   dateBounds?: { min: string; max: string } // full UNSCOPED date range, for the filter UI
   projectList?: string[] // all distinct projects (cwd), UNSCOPED, for the project filter
+  monthlyCost?: { month: string; cost: number }[] // UNSCOPED total est. cost per YYYY-MM (for the budget card)
 }
 
 function safeParse(l: string): Record<string, unknown> | null {
@@ -406,6 +407,7 @@ async function scanClaude(scope: Scope = {}): Promise<ScanResult> {
   let dateMin = ''
   let dateMax = ''
   const projectCount = new Map<string, number>() // cwd → assistant-line count, for ranking the filter list
+  const monthCost = new Map<string, number>() // YYYY-MM → total est. cost, UNSCOPED (budget card)
   const inScope = (date: string, cwd: string) =>
     (!scope.from || date >= scope.from) &&
     (!scope.to || date <= scope.to) &&
@@ -464,6 +466,21 @@ async function scanClaude(scope: Scope = {}): Promise<ScanResult> {
         if (cwd) projectCount.set(cwd, (projectCount.get(cwd) ?? 0) + 1)
         if (!fileCwd && cwd) fileCwd = cwd
         if (!fileDate) fileDate = date
+        // Unscoped monthly cost for the budget card (filter-independent).
+        const mu0 = m.usage as Record<string, unknown> | undefined
+        if (mu0) {
+          const ym = date.slice(0, 7)
+          monthCost.set(
+            ym,
+            (monthCost.get(ym) ?? 0) +
+              estimateCostUSD((m.model as string) || 'unknown', {
+                input: Number(mu0.input_tokens) || 0,
+                output: Number(mu0.output_tokens) || 0,
+                cacheRead: Number(mu0.cache_read_input_tokens) || 0,
+                cacheCreate: Number(mu0.cache_creation_input_tokens) || 0,
+              }),
+          )
+        }
         if (!inScope(date, cwd)) continue
         const hd = localHourDow(d.timestamp)
         if (hd) {
@@ -623,6 +640,7 @@ async function scanClaude(scope: Scope = {}): Promise<ScanResult> {
     dateBounds: { min: dateMin, max: dateMax },
     // Most-active projects first, capped — keeps the filter dropdown usable.
     projectList: [...projectCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 50).map(([k]) => k),
+    monthlyCost: [...monthCost.entries()].map(([month, cost]) => ({ month, cost })).sort((a, b) => a.month.localeCompare(b.month)),
     activity,
     activityByDate: activityDateOut(activityDate),
     sessions: topSessions(sessionStats),
