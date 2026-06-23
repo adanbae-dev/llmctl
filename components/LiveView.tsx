@@ -3,9 +3,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Message, Provider } from '@/lib/adapters/types'
 import { MessageBubble } from './MessageBubble'
-import { EmptyState } from '@/components/ui'
+import { BarList, EmptyState, Sparkline } from '@/components/ui'
 import { estimateCostUSD, isApprox } from '@/lib/pricing'
 import { relativeTime, formatBytes } from '@/lib/format'
+import {
+  burnRate,
+  pushSample,
+  sessionState,
+  throughputSeries,
+  topTools,
+  type RateSample,
+} from '@/lib/live-metrics'
 
 interface ActiveSession {
   id: string
@@ -37,6 +45,10 @@ interface Stream {
   model?: string
   messages: Message[]
   lastUpdate: number
+  // Live insights (accumulated since the viewer opened).
+  toolCounts: Record<string, number> // tool_use calls by name
+  toolErrors: number // tool_result blocks with isError
+  samples: RateSample[] // cumulative output over time, for per-session burn rate
 }
 
 const TICK_MS = 2500
@@ -56,6 +68,7 @@ export function LiveView({ onOpen }: { onOpen?: (provider: Provider, id: string)
   const streamsRef = useRef<Record<string, Stream>>({})
   const activeRef = useRef<ActiveSession[]>([])
   const pausedRef = useRef(false)
+  const aggSamplesRef = useRef<RateSample[]>([]) // aggregate output+cost over time
   activeRef.current = active
   pausedRef.current = paused
 
@@ -73,6 +86,9 @@ export function LiveView({ onOpen }: { onOpen?: (provider: Provider, id: string)
             outTok: 0,
             messages: [],
             lastUpdate: 0,
+            toolCounts: {},
+            toolErrors: 0,
+            samples: [],
           }
         }
       }
@@ -103,6 +119,10 @@ export function LiveView({ onOpen }: { onOpen?: (provider: Provider, id: string)
             st.inTok += m.usage.inputTokens ?? 0
             st.outTok += m.usage.outputTokens ?? 0
           }
+          for (const b of m.blocks) {
+            if (b.kind === 'tool_use') st.toolCounts[b.name] = (st.toolCounts[b.name] ?? 0) + 1
+            else if (b.kind === 'tool_result' && b.isError) st.toolErrors += 1
+          }
         }
         st.messages = [...st.messages, ...msgs].slice(-MAX_MSGS)
         st.lastUpdate = Date.now()
@@ -119,6 +139,8 @@ export function LiveView({ onOpen }: { onOpen?: (provider: Provider, id: string)
         st.outTok = Math.max(0, co - (st.baseOut ?? 0))
         if (st.lastUpdate === 0) st.lastUpdate = Date.now()
       }
+      // Sample cumulative output every tick so the rate decays when idle.
+      st.samples = pushSample(st.samples, { t: Date.now(), out: st.outTok })
     } catch {
       // transient — next tick retries
     }
@@ -133,6 +155,25 @@ export function LiveView({ onOpen }: { onOpen?: (provider: Provider, id: string)
       if (tick % LIST_EVERY === 0) await refreshList()
       tick++
       await Promise.all(activeRef.current.map(tailOne))
+      // Aggregate sample for the burn-rate + throughput sparkline.
+      let aggOut = 0
+      let aggCost = 0
+      for (const s of activeRef.current) {
+        const st = streamsRef.current[s.id]
+        if (!st) continue
+        aggOut += st.outTok
+        aggCost += estimateCostUSD(st.model ?? s.provider, {
+          input: st.inTok,
+          output: st.outTok,
+          cacheRead: 0,
+          cacheCreate: 0,
+        })
+      }
+      aggSamplesRef.current = pushSample(aggSamplesRef.current, {
+        t: Date.now(),
+        out: aggOut,
+        cost: aggCost,
+      })
       if (!cancelled) setBump((b) => b + 1)
     }
     run()
@@ -149,10 +190,13 @@ export function LiveView({ onOpen }: { onOpen?: (provider: Provider, id: string)
   }, [refreshList, tailOne])
 
   // Aggregate live totals across the active sessions.
+  const now = Date.now()
   let totalIn = 0
   let totalOut = 0
   let totalCost = 0
   let anyApprox = false
+  const allTools: Record<string, number> = {}
+  let allErrors = 0
   for (const s of active) {
     const st = streamsRef.current[s.id]
     if (!st) continue
@@ -166,7 +210,12 @@ export function LiveView({ onOpen }: { onOpen?: (provider: Provider, id: string)
       cacheCreate: 0,
     })
     if (isApprox(model)) anyApprox = true
+    for (const [k, v] of Object.entries(st.toolCounts)) allTools[k] = (allTools[k] ?? 0) + v
+    allErrors += st.toolErrors
   }
+  const burn = burnRate(aggSamplesRef.current)
+  const spark = throughputSeries(aggSamplesRef.current)
+  const tools = topTools(allTools)
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-4">
@@ -202,6 +251,47 @@ export function LiveView({ onOpen }: { onOpen?: (provider: Provider, id: string)
         </span>
       </div>
 
+      {/* Live insights: burn rate + throughput sparkline, live tool usage */}
+      {active.length > 0 && (
+        <div className="mb-4 grid gap-3 sm:grid-cols-2">
+          <div className="rounded-lg border border-border bg-surface px-4 py-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-2xs text-fg-subtle">번레이트 (최근 1분)</span>
+              <span className="text-brand">
+                <Sparkline values={spark.slice(-32)} />
+              </span>
+            </div>
+            <div className="mt-1 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <span className="font-mono text-lg text-fg-strong">
+                {burn.ok ? `↓${Math.round(burn.tokPerMin).toLocaleString()}` : '—'}
+                <span className="ml-1 text-2xs text-fg-faint">tok/분</span>
+              </span>
+              {burn.ok && (
+                <span className="font-mono text-sm text-data-cost">
+                  ~${burn.usdPerHour.toFixed(2)}/시
+                  {anyApprox && <span className="ml-1 text-2xs text-fg-faint">추정</span>}
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="rounded-lg border border-border bg-surface px-4 py-3">
+            <div className="mb-1 flex items-center justify-between">
+              <span className="text-2xs text-fg-subtle">🛠 도구 사용 (라이브)</span>
+              {allErrors > 0 && (
+                <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-2xs font-medium text-red-400">
+                  ⚠ 실패 {allErrors}
+                </span>
+              )}
+            </div>
+            {tools.length > 0 ? (
+              <BarList title="" items={tools} color="bg-violet-500" />
+            ) : (
+              <p className="text-2xs text-fg-faint">아직 도구 호출 없음</p>
+            )}
+          </div>
+        </div>
+      )}
+
       {err && (
         <div className="mb-3 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
           ⚠ {err}
@@ -227,11 +317,22 @@ export function LiveView({ onOpen }: { onOpen?: (provider: Provider, id: string)
                   cacheCreate: 0,
                 })
               : 0
+            const state = st ? sessionState(st.lastUpdate, now) : 'idle'
+            const rate = st ? burnRate(st.samples) : null
             return (
               <div key={s.id} className="rounded-lg border border-border bg-surface">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 py-2.5">
                   <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-red-500" />
                   <span className="font-mono text-2xs text-fg-muted">{s.provider}</span>
+                  <span
+                    className={`rounded px-1.5 py-0.5 text-2xs font-medium ${
+                      state === 'generating'
+                        ? 'bg-emerald-500/15 text-emerald-400'
+                        : 'bg-surface-2 text-fg-faint'
+                    }`}
+                  >
+                    {state === 'generating' ? '생성 중' : '대기'}
+                  </span>
                   <span className="min-w-0 truncate text-sm font-medium text-fg-strong" title={s.title}>
                     {s.title || '(untitled)'}
                   </span>
@@ -259,6 +360,11 @@ export function LiveView({ onOpen }: { onOpen?: (provider: Provider, id: string)
                   {st && st.lastUpdate > 0
                     ? `스트리밍 중 · ${relativeTime(new Date(st.lastUpdate).toISOString())}`
                     : '새 메시지 대기 중…'}
+                  {rate?.ok && (
+                    <span className="ml-1 font-mono text-fg-subtle">
+                      · ↓{Math.round(rate.tokPerMin).toLocaleString()} tok/분
+                    </span>
+                  )}
                 </div>
                 {st && st.messages.length > 0 && (
                   <div className="max-h-80 space-y-2 overflow-y-auto px-4 pb-4">
