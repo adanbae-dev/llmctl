@@ -36,18 +36,56 @@ It can still surface **secrets, tokens, and file contents** from your transcript
 - **No authentication** — anyone with access to the machine and the port can read transcripts. Don't run
   it on a shared or exposed host.
 
-## Features
+## What you get
 
-- **Unified session viewer** across 6 sources — one tab per provider (greyed out when not installed).
+Four ways in: **💬 Sessions**, **📊 Usage**, **🔴 Live**, and header-bar **🔍 Search**.
+
+### 💬 Sessions — unified conversation viewer
+
+- **One tab per provider** across 6 sources (greyed out when not installed), detected from on-disk
+  data and installed binaries (with version) via `/api/providers`.
 - **Conversation view**: user / assistant / system / tool messages; collapsible *thinking* and
   *tool-call / tool-result* blocks; markdown + syntax highlighting; per-message model & token
   badges; a divider marking mid-session model changes.
-- **Dynamic detection**: providers are detected from on-disk data and installed binaries
-  (with version) via `/api/providers`.
-- **Usage & cost dashboard** (Claude / Cursor / Codex): tokens by day and model, **tool-call
-  counts**, estimated USD cost, a date-range calendar + model filters, and a Recharts bar chart.
-- **Session management**: delete file-based sessions to a recoverable trash; hide DB-backed
-  (Cursor / Antigravity) sessions app-side without touching their databases.
+- **Favorites ⭐, tags, and notes** per session — stored in `~/.llmctl/meta.json`, never written
+  into your transcripts — with a "favorites only" sidebar filter.
+- **Export** any session to **Markdown** or **JSON**.
+- **Session management**: delete file-based sessions to a recoverable trash (`~/.llmctl/trash/`);
+  hide DB-backed (Cursor / Antigravity) sessions app-side without touching their databases; an
+  archive view surfaces sessions deleted from the live root but kept in the backup.
+
+### 📊 Usage & cost dashboard (Claude / Codex / Cursor)
+
+- **Scope filter** across the whole dashboard: **date range + project**.
+- Overview plus sub-tabs — **Cost, Tools, Activity, Sessions, Compare, Security**.
+- **Cost**: tokens by day & model, estimated USD, daily cost trend (7-day avg + cumulative),
+  per-project / per-branch spend, and a **monthly budget + month-end forecast** (MTD, burn rate,
+  threshold colors).
+- **Tools**: tool-call counts, **tool error rate** (incl. hook-blocked calls), hottest files
+  (Read / Edit / Write).
+- **Activity**: a 7×24 hour-of-week heatmap **and** a GitHub-style calendar heatmap over the
+  selected range; streak / busiest-day stats.
+- **Sessions / Compare**: **session Top-N** by cost & size (cleanup candidates), efficiency cards
+  (cache $ saved, output/input ratio, truncation rate), and **model-share trend**.
+- **Security**: scans transcripts for secrets / tokens / PII, **split by severity** — 🔴 *exposed*
+  (real-looking credential) vs 🟡 *mention* (placeholder / example / masked) — with per-type bars
+  and **jump-to-message** (click a match to open the session scrolled to the exact message).
+- **CSV export** of the filtered usage rows.
+
+### 🔴 Live — real-time usage viewer
+
+- Auto-detects **currently-active Claude / Codex sessions** (appended in the last 5 min) and
+  **streams new messages** as they're written, built on the adapters' offset-based `tail()`.
+- **Live token & cost counter** per session and in aggregate (cost marked *approx*).
+- **Live insights**: **burn rate** (tokens/min + ~$/hr) with a throughput **sparkline**, live
+  **tool-usage** breakdown + a tool-error badge, and a **generating / idle** state badge per session.
+- Polls efficiently (list ~7.5 s, per-session tail ~2.5 s) and pauses when the tab is hidden or
+  via a manual toggle.
+
+### 🔍 Cross-session search
+
+- Full-text search across **all** sessions from the header, with snippet highlighting and
+  **jump-to-message** straight to the matching turn.
 
 ## Supported sources
 
@@ -97,11 +135,19 @@ are **approximate** and marked with `≈`. Adjust any rate in `lib/pricing.ts`.
 
 - `lib/adapters/*` — one adapter per provider (`discover` / `parse` / `tail`), normalized into the
   shared model in `lib/adapters/types.ts`. Each adapter exposes a `tail()` seam + `appendable`
-  flag so live-watch (v2) can be added without a rewrite.
-- `lib/usage.ts` — per-provider token & tool aggregation by (date, model); `lib/pricing.ts` — cost.
-- `lib/paths.ts` — env/OS-aware path resolution; `lib/store.ts` — trash + hide-list.
-- `app/api/*` — Node-runtime Route Handlers that read the filesystem / SQLite.
-- `components/*` — tabs, sidebar, conversation view, usage dashboard, date-range picker.
+  flag — the Live viewer is built directly on it.
+- `lib/usage.ts` — per-provider token / tool / activity / security / session aggregation, scoped by
+  (date, project); `lib/pricing.ts` — cost.
+- `lib/search.ts` — cross-session full-text search; `lib/exporters.ts` — Markdown / JSON / CSV;
+  `lib/meta.ts` — favorites / tags / notes manifest (`~/.llmctl/meta.json`).
+- `lib/live.ts` — active-session discovery for the Live viewer; `lib/live-metrics.ts` — pure
+  burn-rate / throughput / tool-count helpers.
+- `lib/paths.ts` — env/OS-aware path resolution; `lib/store.ts` — trash + hide-list;
+  `lib/backup.ts` — incremental archive mirror.
+- `app/api/*` — Node-runtime Route Handlers: `/providers`, `/sessions`, `/usage`, `/search`,
+  `/meta`, `/live`, `/live/tail`, `/trash`, `/backup`.
+- `components/*` — tabs, sidebar, conversation view, usage dashboard (`components/usage/*`
+  sub-sections), Live viewer, search results, and shared primitives in `components/ui/*`.
 
 ## Notes & limitations
 
@@ -109,8 +155,14 @@ are **approximate** and marked with `≈`. Adjust any rate in `lib/pricing.ts`.
 - **Codex tokens** appear only for sessions that logged `token_count` events (longer sessions).
 - **Cursor `default`** = Auto-mode sessions don't pin a model; shown as `default` with approximate cost.
 - **Large Codex rollouts** (100s of MB+) are windowed (start + recent ~4 MB) with a "truncated" banner.
+- **Live viewer covers Claude & Codex only** — other providers aren't append-tailable (Gemini
+  rewrites the whole file; Cursor / Cursor-CLI / Antigravity are SQLite/DB-backed).
+- **Live counts are "since you opened the tab"** (by design), and **Claude live cost is approximate**
+  because cache tokens aren't carried on the tailed per-message usage.
 
 ## Roadmap
 
-- **v2 — real-time watch**: tail active sessions live via `chokidar` + SSE (the `tail()` seam and
-  `appendable` flag are already in place).
+- ✅ **Real-time watch (done)** — the 🔴 **Live** tab tails active Claude/Codex sessions via
+  offset polling, with live token/cost counters and burn-rate / tool-usage insights.
+- Ideas next: local-model (Ollama) ingest; true per-session cumulative live totals; exact Claude
+  live cost (carry cache tokens through `tail`).
