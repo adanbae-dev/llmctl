@@ -6,6 +6,7 @@ import { SessionSidebar } from '@/components/SessionSidebar'
 import { ConversationView } from '@/components/ConversationView'
 import { UsageDashboard } from '@/components/UsageDashboard'
 import { SearchResults } from '@/components/SearchResults'
+import { LiveView } from '@/components/LiveView'
 import type { Provider, ProviderStatus, Session, SessionSummary } from '@/lib/adapters/types'
 import type { MetaMap, SessionMeta } from '@/lib/meta'
 
@@ -17,7 +18,7 @@ export default function Home() {
   const [selected, setSelected] = useState<SessionSummary | null>(null)
   const [session, setSession] = useState<Session | null>(null)
   const [loadingSession, setLoadingSession] = useState(false)
-  const [view, setView] = useState<'sessions' | 'usage' | 'search'>('sessions')
+  const [view, setView] = useState<'sessions' | 'usage' | 'search' | 'live'>('sessions')
   const [trashPreview, setTrashPreview] = useState(false)
   // Cross-session search: input value vs the committed query that drives results.
   const [searchInput, setSearchInput] = useState('')
@@ -175,7 +176,7 @@ export default function Home() {
     openSession('claude', id, anchor)
   }
 
-  const tabBtn = (v: 'sessions' | 'usage') =>
+  const tabBtn = (v: 'sessions' | 'usage' | 'live') =>
     `rounded px-3 py-1 text-xs font-medium ${
       view === v ? 'bg-surface-2 text-fg-strong' : 'text-fg-subtle hover:text-fg-muted'
     }`
@@ -190,6 +191,9 @@ export default function Home() {
         </button>
         <button type="button" onClick={() => setView('usage')} className={tabBtn('usage')}>
           📊 사용량
+        </button>
+        <button type="button" onClick={() => setView('live')} className={tabBtn('live')}>
+          🔴 실시간
         </button>
         <form
           className="ml-auto flex items-center"
@@ -220,6 +224,10 @@ export default function Home() {
       ) : view === 'search' ? (
         <div className="flex-1 overflow-y-auto">
           <SearchResults query={searchQ} onOpen={openSession} />
+        </div>
+      ) : view === 'live' ? (
+        <div className="flex-1 overflow-y-auto">
+          <LiveView onOpen={openSession} />
         </div>
       ) : (
         <>

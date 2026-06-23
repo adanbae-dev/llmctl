@@ -52,6 +52,13 @@ export interface TailResult {
   messages: Message[]
   nextOffset: number
   truncated?: boolean
+  /**
+   * Cumulative session token usage as of this chunk, when the provider logs it
+   * as a running total (Codex `token_count` events). Absent for providers whose
+   * per-message usage lives on the messages themselves (Claude). The live viewer
+   * uses it to track Codex token growth, which messages alone don't carry.
+   */
+  usage?: Usage
 }
 
 export interface ProviderStatus {

@@ -211,7 +211,9 @@ async function walk(dir: string): Promise<string[]> {
 
 const tail: ProviderAdapter['tail'] = async (filePath, fromOffset) => {
   const { lines, nextOffset } = await readLinesFromOffset(filePath, fromOffset)
-  return { messages: parseLines(lines), nextOffset }
+  // token_count is cumulative; the latest one in this chunk is the session total
+  // so far. The live viewer diffs it against a baseline to show growth.
+  return { messages: parseLines(lines), nextOffset, usage: extractUsage(lines) }
 }
 
 const parse: ProviderAdapter['parse'] = async (filePath) => {
